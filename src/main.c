@@ -56,9 +56,20 @@ app_t *current_app = NULL;
 
 const uint8_t *ccid_atr = NULL;
 
+static bool aid_matches(const uint8_t *registered_aid, const uint8_t *aid, size_t aid_len) {
+    return aid_len >= registered_aid[0] &&
+        memcmp(registered_aid + 1, aid, registered_aid[0]) == 0;
+}
+
+__attribute__((weak)) bool picokey_app_policy(const uint8_t *aid, size_t aid_len) {
+    (void) aid;
+    (void) aid_len;
+    return true;
+}
+
 bool app_exists(const uint8_t *aid, size_t aid_len) {
     for (int a = 0; a < num_apps; a++) {
-        if (aid_len >= apps[a].aid[0] && !memcmp(apps[a].aid + 1, aid, apps[a].aid[0])) {
+        if (aid_matches(apps[a].aid, aid, aid_len)) {
             return true;
         }
     }
@@ -66,8 +77,11 @@ bool app_exists(const uint8_t *aid, size_t aid_len) {
 }
 
 int register_app(int (*select_aid)(app_t *, uint8_t), const uint8_t *aid) {
-    if (app_exists(aid + 1, aid[0])) {
-        return 1;
+    for (int a = 0; a < num_apps; a++) {
+        if (apps[a].aid[0] == aid[0] &&
+            memcmp(apps[a].aid + 1, aid + 1, aid[0]) == 0) {
+            return 1;
+        }
     }
     if (num_apps < sizeof(apps) / sizeof(app_t)) {
         apps[num_apps].select_aid = select_aid;
@@ -78,30 +92,53 @@ int register_app(int (*select_aid)(app_t *, uint8_t), const uint8_t *aid) {
     return 0;
 }
 
-int select_app(const uint8_t *aid, size_t aid_len) {
-    if (current_app && current_app->aid && (current_app->aid + 1 == aid || (aid_len >= current_app->aid[0] && !memcmp(current_app->aid + 1, aid, current_app->aid[0])))) {
-        current_app->select_aid(current_app, 0);
-        return PICOKEY_OK;
-    }
+static int select_app_impl(const uint8_t *aid, size_t aid_len) {
+    app_t *candidate = NULL;
     for (int a = 0; a < num_apps; a++) {
-        if (aid_len >= apps[a].aid[0] && !memcmp(apps[a].aid + 1, aid, apps[a].aid[0])) {
-            if (current_app) {
-                if (current_app->aid && aid_len >= current_app->aid[0] && !memcmp(current_app->aid + 1, aid, current_app->aid[0])) {
-                    current_app->select_aid(current_app, 1);
-                    return PICOKEY_OK;
-                }
-                if (current_app->unload) {
-                    current_app->unload();
-                }
-            }
-            current_app = &apps[a];
-            if (current_app->select_aid(current_app, 1) == PICOKEY_OK) {
-                return PICOKEY_OK;
-            }
+        if (aid_matches(apps[a].aid, aid, aid_len) &&
+            (!candidate || apps[a].aid[0] > candidate->aid[0])) {
+            candidate = &apps[a];
         }
     }
-    return PICOKEY_ERR_FILE_NOT_FOUND;
+    if (!candidate) {
+        return PICOKEY_ERR_FILE_NOT_FOUND;
+    }
+
+    if (!picokey_app_policy(candidate->aid + 1, candidate->aid[0])) {
+        if (candidate == current_app) {
+            if (current_app->unload) {
+                current_app->unload();
+            }
+            current_app = NULL;
+        }
+        return PICOKEY_ERR_FILE_NOT_FOUND;
+    }
+
+    bool reselect = candidate == current_app;
+    if (!reselect && current_app && current_app->unload) {
+        current_app->unload();
+    }
+    if (!reselect) {
+        current_app = NULL;
+    }
+
+    int ret = candidate->select_aid(candidate, reselect ? 0 : 1);
+    if (ret == PICOKEY_OK) {
+        current_app = candidate;
+        return PICOKEY_OK;
+    }
+
+    if (reselect && current_app && current_app->unload) {
+        current_app->unload();
+    }
+    current_app = NULL;
+    return ret;
 }
+
+int select_app(const uint8_t *aid, size_t aid_len) {
+    return select_app_impl(aid, aid_len);
+}
+
 
 int (*button_pressed_cb)(uint8_t) = NULL;
 
@@ -110,10 +147,22 @@ void execute_tasks();
 static bool req_button_pending = false;
 
 bool is_req_button_pending() {
-    return req_button_pending;
+    return __atomic_load_n(&req_button_pending, __ATOMIC_ACQUIRE);
 }
 
-bool cancel_button = false;
+static bool cancel_button = false;
+
+void button_cancel_request(void) {
+    __atomic_store_n(&cancel_button, true, __ATOMIC_RELEASE);
+}
+
+void button_cancel_clear(void) {
+    __atomic_store_n(&cancel_button, false, __ATOMIC_RELEASE);
+}
+
+bool button_cancel_is_requested(void) {
+    return __atomic_load_n(&cancel_button, __ATOMIC_ACQUIRE);
+}
 
 #ifdef _MSC_VER
 #include <windows.h>
@@ -209,22 +258,28 @@ bool wait_button() {
     }
     uint32_t start_button = board_millis();
     bool timeout = false;
-    cancel_button = false;
+    button_cancel_clear();
     uint32_t led_mode = led_get_mode();
     led_set_mode(MODE_BUTTON);
-    req_button_pending = true;
-    while (picok_board_button_read() == false && cancel_button == false) {
-        execute_tasks();
-        //sleep_ms(10);
+    __atomic_store_n(&req_button_pending, true, __ATOMIC_RELEASE);
+    while (picok_board_button_read() == false && !button_cancel_is_requested()) {
+#if defined(ESP_PLATFORM)
+        vTaskDelay(1);
+#elif defined(PICO_PLATFORM)
+        sleep_ms(1);
+#endif
         if (start_button + button_timeout < board_millis()) { /* timeout */
             timeout = true;
             break;
         }
     }
     if (!timeout) {
-        while (picok_board_button_read() == true && cancel_button == false) {
-            execute_tasks();
-            //sleep_ms(10);
+        while (picok_board_button_read() == true && !button_cancel_is_requested()) {
+#if defined(ESP_PLATFORM)
+            vTaskDelay(1);
+#elif defined(PICO_PLATFORM)
+            sleep_ms(1);
+#endif
             if (start_button + 15000 < board_millis()) { /* timeout */
                 timeout = true;
                 break;
@@ -232,8 +287,8 @@ bool wait_button() {
         }
     }
     led_set_mode(led_mode);
-    req_button_pending = false;
-    return timeout || cancel_button;
+    __atomic_store_n(&req_button_pending, false, __ATOMIC_RELEASE);
+    return timeout || button_cancel_is_requested();
 }
 
 __attribute__((weak)) int picokey_init() {
@@ -283,6 +338,9 @@ void init_rtc() {
 
 extern void hwrng_task();
 extern void usb_task();
+__attribute__((weak)) void picokey_extra_transport_init() {}
+__attribute__((weak)) void picokey_extra_transport_task() {}
+
 void execute_tasks()
 {
 #if !defined(ENABLE_EMULATION) && !defined(ESP_PLATFORM)
@@ -291,6 +349,7 @@ void execute_tasks()
 #if !defined(ESP_PLATFORM) || !CONFIG_PICO_FIDO2_QEMU
     usb_task();
 #endif
+    picokey_extra_transport_task();
     led_blinking_task();
 }
 
@@ -298,7 +357,10 @@ void core0_loop() {
     while (1) {
         execute_tasks();
         hwrng_task();
-        do_flash();
+        if (low_flash_is_pending() && card_try_claim_maintenance()) {
+            do_flash();
+            card_release_maintenance();
+        }
 #ifndef ENABLE_EMULATION
         if (button_pressed_cb && board_millis() > 1000 && !is_busy()) { // wait 1 second to boot up
             bool current_button_state = picok_board_button_read();
@@ -376,11 +438,13 @@ int main(void) {
     led_init();
 
     usb_init();
+    picokey_extra_transport_init();
 
 #ifndef ENABLE_EMULATION
 #ifdef ESP_PLATFORM
     gpio_pad_select_gpio(BOOT_PIN);
     gpio_set_direction(BOOT_PIN, GPIO_MODE_INPUT);
+    gpio_pullup_en(BOOT_PIN);
     gpio_pulldown_dis(BOOT_PIN);
 
     tusb_cfg.string_descriptor[3] = pico_serial_str;
@@ -409,7 +473,12 @@ int main(void) {
 #endif
 
 #ifdef ESP_PLATFORM
-    xTaskCreatePinnedToCore(core0_loop, "core0", 4096*ITF_TOTAL*2, NULL, CONFIG_TINYUSB_TASK_PRIORITY - 1, &hcore0, ESP32_CORE0);
+    if (xTaskCreatePinnedToCore(core0_loop, "core0", CONFIG_PICOKEYS_ESP32_CORE_STACK_SIZE,
+                               NULL, CONFIG_TINYUSB_TASK_PRIORITY - 1, &hcore0,
+                               ESP32_CORE0) != pdPASS) {
+        printf("core0 task creation failed\n");
+        return 1;
+    }
 #else
     core0_loop();
 #endif
