@@ -47,7 +47,7 @@
 
 extern void do_flash();
 extern void low_flash_init();
-extern void init_otp_files();
+extern int init_otp_files();
 
 app_t apps[16];
 uint8_t num_apps = 0;
@@ -363,7 +363,11 @@ int main(void) {
 
     random_init();
 
-    init_otp_files();
+    int otp_ret = init_otp_files();
+    if (otp_ret != PICOKEY_OK) {
+        printf("OTP initialization failed [%d]\n", otp_ret);
+        return otp_ret;
+    }
 
     low_flash_init();
 

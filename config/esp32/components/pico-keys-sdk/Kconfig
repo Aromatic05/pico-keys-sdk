@@ -12,4 +12,13 @@ config PICOKEYS_ESP32_DEV_KEYS
         This mode is intentionally insecure and must never be used for a
         production security token.
 
+config PICOKEYS_ESP32_REQUIRE_PROVISIONED_KEYS
+    bool "Require host-provisioned root keys"
+    default n
+    depends on IDF_TARGET_ESP32S3 && !PICOKEYS_ESP32_DEV_KEYS
+    help
+        Refuse to start if KEY3 (MKEK) and KEY4 (device key) are not already
+        provisioned as readable USER keys with key and purpose write locks.
+        The firmware will never generate or burn these keys in this mode.
+
 endmenu

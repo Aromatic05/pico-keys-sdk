@@ -317,7 +317,7 @@ void otp_migrate_chaff() {
 }
 #endif
 
-void init_otp_files() {
+int init_otp_files() {
 
 #ifdef PICO_RP2350
     otp_migrate_chaff();
@@ -328,6 +328,21 @@ void init_otp_files() {
     memset(_otp_key_2, 0xBE, sizeof(_otp_key_2));
     otp_key_1 = _otp_key_1;
     otp_key_2 = _otp_key_2;
+#elif defined(ESP_PLATFORM) && defined(CONFIG_PICOKEYS_ESP32_REQUIRE_PROVISIONED_KEYS)
+    const esp_efuse_block_t required_keys[] = {OTP_KEY_1, OTP_KEY_2};
+    for (size_t i = 0; i < sizeof(required_keys) / sizeof(required_keys[0]); i++) {
+        const esp_efuse_block_t block = required_keys[i];
+        if (OTP_EMTPY(block, 32)
+            || esp_efuse_get_key_purpose(block) != ESP_EFUSE_KEY_PURPOSE_USER
+            || !esp_efuse_get_key_dis_write(block)
+            || !esp_efuse_get_keypurpose_dis_write(block)
+            || esp_efuse_get_key_dis_read(block)) {
+            printf("Required ESP32 root key block %d is not provisioned correctly\n", block);
+            return PICOKEY_ERR_PROVISIONING_REQUIRED;
+        }
+    }
+    OTP_READ(OTP_KEY_1, otp_key_1);
+    OTP_READ(OTP_KEY_2, otp_key_2);
 #elif defined(PICO_RP2350) || defined(ESP_PLATFORM)
     otp_ret_t ret = 0;
     uint16_t write_otp[2] = {0xFFFF, 0xFFFF};
@@ -391,4 +406,5 @@ void init_otp_files() {
     otp_key_1 = _otp1;
     otp_key_2 = _otp2;
 #endif
+    return PICOKEY_OK;
 }
