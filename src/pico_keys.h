@@ -160,6 +160,7 @@ static inline uint32_t put_uint64_t_le(uint64_t n, uint8_t *b) {
 }
 
 extern void low_flash_available();
+extern bool low_flash_is_pending();
 extern int flash_clear_file(file_t *file);
 
 extern int (*button_pressed_cb)(uint8_t);

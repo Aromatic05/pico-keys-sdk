@@ -341,6 +341,10 @@ int card_status(uint8_t itf) {
         //    printf("\n ------ M = %lu\n",m);
         if (has_m) {
             if (m == EV_EXEC_FINISHED) {
+                if (low_flash_is_pending()) {
+                    queue_try_add(&card_to_usb_q, &m);
+                    return PICOKEY_ERR_FILE_NOT_FOUND;
+                }
                 timeout_stop();
                 led_set_mode(MODE_MOUNTED);
                 return PICOKEY_OK;

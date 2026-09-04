@@ -57,6 +57,7 @@ extern uint8_t cmd;
 uint8_t emul_rx[USB_BUFFER_SIZE], emul_tx[USB_BUFFER_SIZE];
 uint16_t emul_rx_size = 0, emul_tx_size = 0;
 extern int cbor_parse(uint8_t cmd, const uint8_t *data, size_t len);
+extern void do_flash();
 pthread_t hcore0, hcore1;
 
 #ifndef _MSC_VER
@@ -311,6 +312,9 @@ uint16_t emul_read(uint8_t itf) {
                         if ((sent = apdu_process(itf, emul_rx, len)) > 0) {
                             process_apdu();
                             apdu_finish();
+                            if (low_flash_is_pending()) {
+                                do_flash();
+                            }
                         }
                         if (sent > 0) {
                             uint16_t ret = apdu_next();

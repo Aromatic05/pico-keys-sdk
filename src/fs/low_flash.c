@@ -245,6 +245,13 @@ void low_flash_available() {
     mutex_exit(&mtx_flash);
 }
 
+bool low_flash_is_pending() {
+    mutex_enter_blocking(&mtx_flash);
+    bool pending = flash_available && ready_pages > 0;
+    mutex_exit(&mtx_flash);
+    return pending;
+}
+
 page_flash_t *find_free_page(uintptr_t addr) {
     uintptr_t addr_alg = addr & -FLASH_SECTOR_SIZE;
     page_flash_t *p = NULL;
