@@ -1,0 +1,15 @@
+menu "Pico Keys SDK"
+
+config PICOKEYS_ESP32_DEV_KEYS
+    bool "Use reversible development root keys"
+    default n
+    depends on IDF_TARGET_ESP32S3
+    help
+        Use fixed development-only root keys instead of provisioning eFuse
+        key blocks on first boot. This keeps a blank ESP32-S3 fully reversible
+        while testing USB, FIDO, OpenPGP, Wi-Fi, and Bluetooth functionality.
+
+        This mode is intentionally insecure and must never be used for a
+        production security token.
+
+endmenu
