@@ -40,8 +40,11 @@ static uint8_t card_locked_itf = 0; // no locked
 static void *(*card_locked_func)(void *) = NULL;
 #ifndef ENABLE_EMULATION
 static mutex_t mutex;
+static mutex_t card_state_mutex;
 extern void usb_desc_setup();
 #endif
+static bool card_command_active = false;
+static uint8_t card_command_itf = ITF_INVALID;
 #if !defined(PICO_PLATFORM) && !defined(ENABLE_EMULATION) && !defined(ESP_PLATFORM)
 #ifdef _MSC_VER
 #include "pthread_win32.h"
@@ -68,6 +71,71 @@ void usb_set_timeout_counter(uint8_t itf, uint32_t v) {
     timeout_counter[itf] = v;
 }
 
+uint8_t card_register_interface(uint32_t timeout_ms) {
+    bool idle = card_locked_itf == ITF_TOTAL && card_locked_func == NULL;
+    uint8_t itf = ITF_TOTAL++;
+    timeout_counter = (uint32_t *)realloc(timeout_counter, ITF_TOTAL * sizeof(uint32_t));
+    timeout_counter[itf] = timeout_ms;
+    if (idle) {
+        card_locked_itf = ITF_TOTAL;
+    }
+    return itf;
+}
+
+bool card_is_idle() {
+#ifndef ENABLE_EMULATION
+    mutex_enter_blocking(&card_state_mutex);
+#endif
+    bool idle = !card_command_active;
+#ifndef ENABLE_EMULATION
+    mutex_exit(&card_state_mutex);
+#endif
+    return idle;
+}
+
+bool card_is_owned_by(uint8_t itf) {
+    return card_locked_itf == itf;
+}
+
+bool card_try_claim(uint8_t itf) {
+#ifndef ENABLE_EMULATION
+    mutex_enter_blocking(&card_state_mutex);
+#endif
+    bool claimed = !card_command_active;
+    if (claimed) {
+        card_command_active = true;
+        card_command_itf = itf;
+    }
+#ifndef ENABLE_EMULATION
+    mutex_exit(&card_state_mutex);
+#endif
+    return claimed;
+}
+
+void card_release(uint8_t itf) {
+#ifndef ENABLE_EMULATION
+    mutex_enter_blocking(&card_state_mutex);
+#endif
+    if (card_command_active && card_command_itf == itf) {
+        card_command_active = false;
+        card_command_itf = ITF_INVALID;
+    }
+#ifndef ENABLE_EMULATION
+    mutex_exit(&card_state_mutex);
+#endif
+}
+
+bool card_command_is_owned_by(uint8_t itf) {
+#ifndef ENABLE_EMULATION
+    mutex_enter_blocking(&card_state_mutex);
+#endif
+    bool owned = card_command_active && card_command_itf == itf;
+#ifndef ENABLE_EMULATION
+    mutex_exit(&card_state_mutex);
+#endif
+    return owned;
+}
+
 queue_t usb_to_card_q = {0};
 queue_t card_to_usb_q = {0};
 
@@ -88,7 +156,10 @@ void usb_init()
         phy_data.vidpid_present = true;
     }
     mutex_init(&mutex);
+    mutex_init(&card_state_mutex);
 #endif
+    card_command_active = false;
+    card_command_itf = ITF_INVALID;
     queue_init(&card_to_usb_q, sizeof(uint32_t), 64);
     queue_init(&usb_to_card_q, sizeof(uint32_t), 64);
 
@@ -206,6 +277,10 @@ void card_start(uint8_t itf, void *(*func)(void *)) {
         card_locked_itf = itf;
         card_locked_func = func;
     }
+}
+
+void card_start_claimed(uint8_t itf, void *(*func)(void *)) {
+    card_start(itf, func);
 }
 
 void card_exit() {

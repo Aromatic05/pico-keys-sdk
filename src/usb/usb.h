@@ -78,8 +78,15 @@ extern queue_t usb_to_card_q;
 extern queue_t card_to_usb_q;
 
 extern void card_start(uint8_t, void *(*func)(void *));
+extern bool card_try_claim(uint8_t itf);
+extern void card_start_claimed(uint8_t itf, void *(*func)(void *));
+extern void card_release(uint8_t itf);
+extern bool card_command_is_owned_by(uint8_t itf);
 extern void card_exit();
 extern int card_status(uint8_t itf);
+extern uint8_t card_register_interface(uint32_t timeout_ms);
+extern bool card_is_idle();
+extern bool card_is_owned_by(uint8_t itf);
 extern void usb_init();
 
 extern uint16_t finished_data_size;

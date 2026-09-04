@@ -323,6 +323,7 @@ extern void *cbor_thread(void *);
 
 int driver_process_usb_packet_hid(uint16_t read) {
     int apdu_sent = 0;
+    bool claimed_here = false;
     if (read >= 5) {
         driver_init_hid();
 
@@ -385,6 +386,10 @@ int driver_process_usb_packet_hid(uint16_t read) {
             }
         }
         if (ctap_req->init.cmd == CTAPHID_INIT) {
+            if (!card_try_claim(ITF_HID)) {
+                return ctap_error(CTAP1_ERR_CHANNEL_BUSY);
+            }
+            claimed_here = true;
             card_exit();
             hid_tx[ITF_HID_CTAP].r_ptr = hid_tx[ITF_HID_CTAP].w_ptr = 0;
             init_fido();
@@ -404,6 +409,8 @@ int driver_process_usb_packet_hid(uint16_t read) {
             driver_write_hid(ITF_HID_CTAP, (const uint8_t *)ctap_resp, 64);
             msg_packet.len = msg_packet.current_len = 0;
             last_packet_time = 0;
+            card_release(ITF_HID);
+            claimed_here = false;
         }
         else if (ctap_req->init.cmd == CTAPHID_WINK) {
             if (MSG_LEN(ctap_req) != 0) {
@@ -482,6 +489,10 @@ int driver_process_usb_packet_hid(uint16_t read) {
         else if ((last_cmd == CTAPHID_MSG || last_cmd == CTAPHID_OTP) &&
                  (msg_packet.len == 0 ||
                   (msg_packet.len == msg_packet.current_len && msg_packet.len > 0))) {
+            if (!card_try_claim(ITF_HID)) {
+                return ctap_error(CTAP1_ERR_CHANNEL_BUSY);
+            }
+            claimed_here = true;
             if (last_cmd == CTAPHID_OTP) {
                 is_nk = true;
 #ifdef ENABLE_OATH_APP
@@ -506,6 +517,10 @@ int driver_process_usb_packet_hid(uint16_t read) {
         }
         else if ((last_cmd == CTAPHID_CBOR || last_cmd >= CTAPHID_VENDOR_FIRST) &&
                  (msg_packet.len == 0 || (msg_packet.len == msg_packet.current_len && msg_packet.len > 0))) {
+            if (!card_try_claim(ITF_HID)) {
+                return ctap_error(CTAP1_ERR_CHANNEL_BUSY);
+            }
+            claimed_here = true;
             thread_type = 2;
             select_app(fido_aid + 1, fido_aid[0]);
             if (msg_packet.current_len == msg_packet.len && msg_packet.len > 0) {
@@ -517,11 +532,15 @@ int driver_process_usb_packet_hid(uint16_t read) {
             msg_packet.len = msg_packet.current_len = 0;
             last_packet_time = 0;
             if (apdu_sent < 0) {
+                card_release(ITF_HID);
                 return ctap_error((uint8_t)(-apdu_sent));
             }
             send_keepalive();
         }
         else if (ctap_req->init.cmd == CTAPHID_CANCEL) {
+            if (!card_is_idle() && !card_command_is_owned_by(ITF_HID)) {
+                return ctap_error(CTAP1_ERR_CHANNEL_BUSY);
+            }
             ctap_error(0x2D);
             msg_packet.len = msg_packet.current_len = 0;
             last_packet_time = 0;
@@ -538,12 +557,17 @@ int driver_process_usb_packet_hid(uint16_t read) {
         //printf("END\n");
         if (apdu_sent > 0) {
             if (apdu_sent == 1) {
-                card_start(ITF_HID, apdu_thread);
+                card_start_claimed(ITF_HID, apdu_thread);
             }
             else if (apdu_sent == 2) {
-                card_start(ITF_HID, cbor_thread);
+                card_start_claimed(ITF_HID, cbor_thread);
             }
             usb_send_event(EV_CMD_AVAILABLE);
+            claimed_here = false;
+        }
+        else if (claimed_here) {
+            card_release(ITF_HID);
+            claimed_here = false;
         }
     }
     return apdu_sent;
@@ -616,6 +640,7 @@ void hid_task() {
     int status = card_status(ITF_HID);
     if (status == PICOKEY_OK) {
         driver_exec_finished_hid(finished_data_size);
+        card_release(ITF_HID);
     }
     else if (status == PICOKEY_ERR_BLOCKED) {
         send_keepalive();

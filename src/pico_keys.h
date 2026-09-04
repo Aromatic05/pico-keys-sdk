@@ -255,4 +255,7 @@ extern bool has_set_rtc();
 extern time_t get_rtc_time();
 extern void set_rtc_time(time_t tv_sec);
 
+extern void picokey_extra_transport_init();
+extern void picokey_extra_transport_task();
+
 #endif

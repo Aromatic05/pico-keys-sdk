@@ -283,12 +283,16 @@ void init_rtc() {
 
 extern void hwrng_task();
 extern void usb_task();
+__attribute__((weak)) void picokey_extra_transport_init() {}
+__attribute__((weak)) void picokey_extra_transport_task() {}
+
 void execute_tasks()
 {
 #if !defined(ENABLE_EMULATION) && !defined(ESP_PLATFORM)
     tud_task(); // tinyusb device task
 #endif
     usb_task();
+    picokey_extra_transport_task();
     led_blinking_task();
 }
 
@@ -372,6 +376,7 @@ int main(void) {
     led_init();
 
     usb_init();
+    picokey_extra_transport_init();
 
 #ifndef ENABLE_EMULATION
 #ifdef ESP_PLATFORM

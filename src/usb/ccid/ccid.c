@@ -65,6 +65,8 @@
 #define CCID_CMD_STATUS_ERROR   0x40
 #define CCID_CMD_STATUS_TIMEEXT 0x80
 
+void driver_exec_busy_ccid(uint8_t itf);
+
 #define CCID_ERROR_XFR_OVERRUN  0xFC
 
 /*
@@ -301,12 +303,22 @@ int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read) {
                 ccid_write_fast(itf, (const uint8_t *)ccid_resp_fast[itf], 18);
             }
             else if (ccid_header[itf]->bMessageType == CCID_XFR_BLOCK) {
+#ifndef ENABLE_EMULATION
+                uint8_t usb_itf = sc_itf_to_usb_itf(itf);
+                if (!card_try_claim(usb_itf)) {
+                    driver_exec_busy_ccid(itf);
+                    return 0;
+                }
+#endif
                 apdu.rdata = &ccid_response[itf]->apdu;
                 apdu_sent = apdu_process(itf, &ccid_header[itf]->apdu, (uint16_t)ccid_header[itf]->dwLength);
 #ifndef ENABLE_EMULATION
                 if (apdu_sent > 0) {
-                    card_start(sc_itf_to_usb_itf(itf), apdu_thread);
+                    card_start_claimed(usb_itf, apdu_thread);
                     usb_send_event(EV_CMD_AVAILABLE);
+                }
+                else {
+                    card_release(usb_itf);
                 }
 #endif
             }
@@ -314,6 +326,16 @@ int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read) {
         }
     }
     return 0;
+}
+
+void driver_exec_busy_ccid(uint8_t itf) {
+    ccid_resp_fast[itf]->bMessageType = CCID_DATA_BLOCK_RET;
+    ccid_resp_fast[itf]->dwLength = 0;
+    ccid_resp_fast[itf]->bSlot = 0;
+    ccid_resp_fast[itf]->bSeq = ccid_header[itf]->bSeq;
+    ccid_resp_fast[itf]->abRFU0 = ccid_status | CCID_CMD_STATUS_ERROR;
+    ccid_resp_fast[itf]->abRFU1 = 0xE0; /* CMD_SLOT_BUSY */
+    ccid_write_fast(itf, (const uint8_t *)ccid_resp_fast[itf], 10);
 }
 
 void driver_exec_timeout_ccid(uint8_t itf) {
@@ -346,6 +368,7 @@ void ccid_task() {
         int status = card_status(sc_itf_to_usb_itf(itf));
         if (status == PICOKEY_OK) {
             driver_exec_finished_ccid(itf, finished_data_size);
+            card_release(sc_itf_to_usb_itf(itf));
         }
         else if (status == PICOKEY_ERR_BLOCKED) {
             driver_exec_timeout_ccid(itf);
