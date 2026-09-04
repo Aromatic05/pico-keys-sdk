@@ -476,8 +476,9 @@ if(ENABLE_EMULATION)
     set(PICO_KEYS_SOURCES ${PICO_KEYS_SOURCES}
         ${CMAKE_CURRENT_LIST_DIR}/src/usb/emulation/emulation.c
     )
-    set(MBEDTLS_SOURCES ${MBEDTLS_SOURCES}
+    target_sources(mbedtls PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/mbedtls/library/aesni.c
+        ${CMAKE_CURRENT_LIST_DIR}/mbedtls/library/padlock.c
     )
     set(INCLUDES ${INCLUDES}
         ${CMAKE_CURRENT_LIST_DIR}/src/usb/emulation
