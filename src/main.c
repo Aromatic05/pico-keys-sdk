@@ -358,7 +358,9 @@ int main(void) {
 #endif
 
 #else
-    emul_init("127.0.0.1", 35963);
+    if (emul_init("127.0.0.1", 35963) != 0) {
+        return 1;
+    }
 #endif
 
     random_init();

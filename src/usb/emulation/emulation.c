@@ -252,7 +252,7 @@ uint16_t emul_read(uint8_t itf) {
         }
 
         if (pfd.revents & POLLIN) {
-            if (hid_client_sock > 0) {
+            if (hid_client_sock != INVALID_SOCKET) {
                 close(hid_client_sock);
             }
             hid_client_sock = accept(hid_server_sock, (struct sockaddr *) &client_sockaddr, &client_socklen);
@@ -268,6 +268,9 @@ uint16_t emul_read(uint8_t itf) {
 #endif
     socket_t sock = get_sock_itf(itf);
     //printf("get_sockt itf %d - %d\n", itf, sock);
+    if (sock == INVALID_SOCKET) {
+        return 0;
+    }
     uint16_t len = 0;
     fd_set input;
     FD_ZERO(&input);
