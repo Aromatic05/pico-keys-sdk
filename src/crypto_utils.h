@@ -38,6 +38,12 @@
 
 #define IV_SIZE 16
 
+#ifdef ESP_PLATFORM
+/* Avoid collisions with ESP-IDF wpa_supplicant's global AES helpers. */
+#define aes_encrypt pico_keys_aes_encrypt
+#define aes_decrypt pico_keys_aes_decrypt
+#endif
+
 extern int ct_memcmp(const void *a, const void *b, size_t n);
 // Newer and safe functions
 extern void derive_kbase(uint8_t kbase[32]);
