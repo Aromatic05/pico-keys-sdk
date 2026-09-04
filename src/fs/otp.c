@@ -87,6 +87,7 @@ static void otp_lock_page(uint8_t page) {
 #endif
 
 #ifdef ESP_PLATFORM
+#include "esp_secure_boot.h"
 
 uint8_t _otp_key_1[32] = {0};
 uint8_t _otp_key_2[32] = {0};
@@ -150,8 +151,29 @@ bool otp_is_secure_boot_enabled(uint8_t *bootkey) {
         *bootkey = bootkey_idx;
     }
     return true;
-#elif defined(ESP_PLATFORM)
-    // TODO: Implement secure boot check for ESP32-S3
+#elif defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32S3)
+    if (!esp_secure_boot_enabled()) {
+        return false;
+    }
+
+    static const esp_efuse_purpose_t purposes[] = {
+        ESP_EFUSE_KEY_PURPOSE_SECURE_BOOT_DIGEST0,
+        ESP_EFUSE_KEY_PURPOSE_SECURE_BOOT_DIGEST1,
+        ESP_EFUSE_KEY_PURPOSE_SECURE_BOOT_DIGEST2,
+    };
+    for (uint8_t i = 0; i < sizeof(purposes) / sizeof(purposes[0]); ++i) {
+        esp_efuse_block_t block;
+        if (!esp_efuse_find_purpose(purposes[i], &block)) {
+            continue;
+        }
+        if (esp_efuse_get_digest_revoke(i)) {
+            continue;
+        }
+        if (bootkey) {
+            *bootkey = (uint8_t)(block - EFUSE_BLK_KEY0);
+        }
+        return true;
+    }
 #endif
     return false;
 }
@@ -173,8 +195,8 @@ bool otp_is_secure_boot_locked() {
         return false;
     }
     return bootkey_idx != 0xFF;
-#elif defined(ESP_PLATFORM)
-    // TODO: Implement secure boot lock check for ESP32-S3
+#elif defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32S3)
+    return esp_secure_boot_cfg_verify_release_mode();
 #endif
     return false;
 }
@@ -223,8 +245,14 @@ int otp_enable_secure_boot(uint8_t bootkey, bool secure_lock) {
         alignas(4) uint8_t flagsp2[] = { page2v, page2v, page2v, 0x00 };
         PICOKEY_CHECK(otp_write_data_raw(OTP_DATA_PAGE2_LOCK1_ROW, flagsp2, sizeof(flagsp2)));
     }
-#elif defined(ESP_PLATFORM)
-    // TODO: Implement secure boot for ESP32-S3
+#elif defined(ESP_PLATFORM) && defined(CONFIG_IDF_TARGET_ESP32S3)
+    (void)bootkey;
+    if (!otp_is_secure_boot_enabled(NULL)) {
+        return PICOKEY_EXEC_ERROR;
+    }
+    if (secure_lock && !otp_is_secure_boot_locked()) {
+        return PICOKEY_EXEC_ERROR;
+    }
 #else
     (void)bootkey;
     (void)secure_lock;
