@@ -111,6 +111,9 @@ led_driver_t led_driver_dummy = {
 
 void led_init() {
     led_driver = &led_driver_dummy;
+#if defined(ESP_PLATFORM) && CONFIG_PICO_FIDO2_QEMU
+    return;
+#endif
 #if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
     // Guess default driver
 #if defined(PIMORONI_TINY2040) || defined(PIMORONI_TINY2350)

@@ -291,7 +291,9 @@ void execute_tasks()
 #if !defined(ENABLE_EMULATION) && !defined(ESP_PLATFORM)
     tud_task(); // tinyusb device task
 #endif
+#if !defined(ESP_PLATFORM) || !CONFIG_PICO_FIDO2_QEMU
     usb_task();
+#endif
     picokey_extra_transport_task();
     led_blinking_task();
 }
@@ -397,7 +399,9 @@ int main(void) {
     }
     tusb_cfg.configuration_descriptor = desc_config;
 
+#if !CONFIG_PICO_FIDO2_QEMU
     tinyusb_driver_install(&tusb_cfg);
+#endif
 #else
     tusb_init();
 #endif
