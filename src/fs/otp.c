@@ -295,7 +295,12 @@ void init_otp_files() {
     otp_migrate_chaff();
 #endif
 
-#if defined(PICO_RP2350) || defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM) && defined(CONFIG_PICOKEYS_ESP32_DEV_KEYS)
+    memset(_otp_key_1, 0xAC, sizeof(_otp_key_1));
+    memset(_otp_key_2, 0xBE, sizeof(_otp_key_2));
+    otp_key_1 = _otp_key_1;
+    otp_key_2 = _otp_key_2;
+#elif defined(PICO_RP2350) || defined(ESP_PLATFORM)
     otp_ret_t ret = 0;
     uint16_t write_otp[2] = {0xFFFF, 0xFFFF};
     if (OTP_EMTPY(OTP_KEY_1, 32)) {

@@ -218,7 +218,10 @@ void low_flash_init() {
 #else
     fd_map = open("memory.flash", O_RDWR | O_CREAT, (mode_t) 0600);
     lseek(fd_map, FLASH_SIZE_BYTES - 1, SEEK_SET);
-    write(fd_map, "", 1);
+    if (write(fd_map, "", 1) != 1) {
+        perror("memory.flash");
+        exit(EXIT_FAILURE);
+    }
     map = mmap(0, FLASH_SIZE_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd_map, 0);
     data_start_addr = 0;
     data_end_addr = FLASH_SIZE_BYTES;
