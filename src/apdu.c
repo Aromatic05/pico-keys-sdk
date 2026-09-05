@@ -33,8 +33,48 @@ bool is_chaining = false;
 uint8_t chain_buf[2038];
 uint8_t *chain_ptr = NULL;
 
+static void apdu_reset_transport_state(void) {
+    is_chaining = false;
+    chain_ptr = chain_buf;
+    rdata_gr = NULL;
+    rdata_bk = 0;
+    /* Request/response storage is transport-owned; do not invalidate it here. */
+    apdu.header = NULL;
+    apdu.data = NULL;
+    apdu.nc = 0;
+    apdu.ne = 0;
+    apdu.sw = 0;
+    apdu.rlen = 0;
+    finished_data_size = 0;
+    timeout_stop();
+}
+
+void apdu_reset_warm_session(void) {
+    if (current_app && current_app->unload) {
+        current_app->unload();
+    }
+    apdu_reset_transport_state();
+}
+
+void apdu_reset_session(void) {
+    apdu_reset_warm_session();
+    current_app = NULL;
+}
+
 int process_apdu() {
     led_set_mode(MODE_PROCESSING);
+    bool select_by_aid = INS(apdu) == 0xA4 && P1(apdu) == 0x04 &&
+        (P2(apdu) == 0x00 || P2(apdu) == 0x04);
+    if (!select_by_aid && current_app && current_app->aid &&
+        !picokey_app_policy(current_app->aid + 1, current_app->aid[0])) {
+        if (current_app->unload) {
+            current_app->unload();
+        }
+        current_app = NULL;
+        is_chaining = false;
+        chain_ptr = chain_buf;
+        return SW_INS_NOT_SUPPORTED();
+    }
     if (CLA(apdu) & 0x10) {
         if (!is_chaining) {
             chain_ptr = chain_buf;
@@ -55,7 +95,7 @@ int process_apdu() {
             is_chaining = false;
         }
     }
-    if (INS(apdu) == 0xA4 && P1(apdu) == 0x04 && (P2(apdu) == 0x00 || P2(apdu) == 0x4)) { //select by AID
+    if (select_by_aid) { // select by AID
         if (select_app(apdu.data, apdu.nc) == PICOKEY_OK) {
             return SW_OK();
         }

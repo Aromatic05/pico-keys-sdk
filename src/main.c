@@ -56,9 +56,20 @@ app_t *current_app = NULL;
 
 const uint8_t *ccid_atr = NULL;
 
+static bool aid_matches(const uint8_t *registered_aid, const uint8_t *aid, size_t aid_len) {
+    return aid_len >= registered_aid[0] &&
+        memcmp(registered_aid + 1, aid, registered_aid[0]) == 0;
+}
+
+__attribute__((weak)) bool picokey_app_policy(const uint8_t *aid, size_t aid_len) {
+    (void) aid;
+    (void) aid_len;
+    return true;
+}
+
 bool app_exists(const uint8_t *aid, size_t aid_len) {
     for (int a = 0; a < num_apps; a++) {
-        if (aid_len >= apps[a].aid[0] && !memcmp(apps[a].aid + 1, aid, apps[a].aid[0])) {
+        if (aid_matches(apps[a].aid, aid, aid_len)) {
             return true;
         }
     }
@@ -66,8 +77,11 @@ bool app_exists(const uint8_t *aid, size_t aid_len) {
 }
 
 int register_app(int (*select_aid)(app_t *, uint8_t), const uint8_t *aid) {
-    if (app_exists(aid + 1, aid[0])) {
-        return 1;
+    for (int a = 0; a < num_apps; a++) {
+        if (apps[a].aid[0] == aid[0] &&
+            memcmp(apps[a].aid + 1, aid + 1, aid[0]) == 0) {
+            return 1;
+        }
     }
     if (num_apps < sizeof(apps) / sizeof(app_t)) {
         apps[num_apps].select_aid = select_aid;
@@ -78,29 +92,55 @@ int register_app(int (*select_aid)(app_t *, uint8_t), const uint8_t *aid) {
     return 0;
 }
 
-int select_app(const uint8_t *aid, size_t aid_len) {
-    if (current_app && current_app->aid && (current_app->aid + 1 == aid || (aid_len >= current_app->aid[0] && !memcmp(current_app->aid + 1, aid, current_app->aid[0])))) {
-        current_app->select_aid(current_app, 0);
-        return PICOKEY_OK;
-    }
+static int select_app_impl(const uint8_t *aid, size_t aid_len, bool enforce_policy) {
+    app_t *candidate = NULL;
     for (int a = 0; a < num_apps; a++) {
-        if (aid_len >= apps[a].aid[0] && !memcmp(apps[a].aid + 1, aid, apps[a].aid[0])) {
-            if (current_app) {
-                if (current_app->aid && aid_len >= current_app->aid[0] && !memcmp(current_app->aid + 1, aid, current_app->aid[0])) {
-                    current_app->select_aid(current_app, 1);
-                    return PICOKEY_OK;
-                }
-                if (current_app->unload) {
-                    current_app->unload();
-                }
-            }
-            current_app = &apps[a];
-            if (current_app->select_aid(current_app, 1) == PICOKEY_OK) {
-                return PICOKEY_OK;
-            }
+        if (aid_matches(apps[a].aid, aid, aid_len) &&
+            (!candidate || apps[a].aid[0] > candidate->aid[0])) {
+            candidate = &apps[a];
         }
     }
-    return PICOKEY_ERR_FILE_NOT_FOUND;
+    if (!candidate) {
+        return PICOKEY_ERR_FILE_NOT_FOUND;
+    }
+
+    if (enforce_policy && !picokey_app_policy(candidate->aid + 1, candidate->aid[0])) {
+        if (candidate == current_app) {
+            if (current_app->unload) {
+                current_app->unload();
+            }
+            current_app = NULL;
+        }
+        return PICOKEY_ERR_FILE_NOT_FOUND;
+    }
+
+    bool reselect = candidate == current_app;
+    if (!reselect && current_app && current_app->unload) {
+        current_app->unload();
+    }
+    if (!reselect) {
+        current_app = NULL;
+    }
+
+    int ret = candidate->select_aid(candidate, reselect ? 0 : 1);
+    if (ret == PICOKEY_OK) {
+        current_app = candidate;
+        return PICOKEY_OK;
+    }
+
+    if (reselect && current_app && current_app->unload) {
+        current_app->unload();
+    }
+    current_app = NULL;
+    return ret;
+}
+
+int select_app(const uint8_t *aid, size_t aid_len) {
+    return select_app_impl(aid, aid_len, true);
+}
+
+int select_app_unchecked(const uint8_t *aid, size_t aid_len) {
+    return select_app_impl(aid, aid_len, false);
 }
 
 int (*button_pressed_cb)(uint8_t) = NULL;

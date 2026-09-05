@@ -238,6 +238,8 @@ int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read) {
                 ccid_write_fast(itf, (const uint8_t *)ccid_resp_fast[itf], 10);
             }
             else if (ccid_header[itf]->bMessageType == CCID_POWER_ON) {
+                /* A card power cycle starts a fresh authentication/application session. */
+                apdu_reset_session();
                 size_t size_atr = (ccid_atr ? ccid_atr[0] : 0);
                 ccid_resp_fast[itf]->bMessageType = CCID_DATA_BLOCK_RET;
                 ccid_resp_fast[itf]->dwLength = (uint32_t)size_atr;
@@ -256,6 +258,8 @@ int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read) {
                 led_set_mode(MODE_MOUNTED);
             }
             else if (ccid_header[itf]->bMessageType == CCID_POWER_OFF) {
+                /* Do not carry PIN/management authentication across ICC power-off. */
+                apdu_reset_session();
                 if (ccid_status == 0) {
                     //card_exit(0);
                 }

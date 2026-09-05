@@ -315,7 +315,15 @@ uint16_t emul_read(uint8_t itf) {
                         }
                         else
 #endif
-                        if (c == 4) {
+                        if (itf == ITF_CCID && c == 2) {
+                            /* vpcd warm reset clears authentication but retains the selected app. */
+                            apdu_reset_warm_session();
+                        }
+                        else if (itf == ITF_CCID && (c == 0 || c == 1)) {
+                            /* Power Off/On starts a new card/application session. */
+                            apdu_reset_session();
+                        }
+                        else if (c == 4) {
                             driver_write_emul(itf, ccid_atr ? ccid_atr + 1 : NULL, ccid_atr ? ccid_atr[0] : 0);
                         }
                     }

@@ -37,6 +37,9 @@ typedef struct app {
 extern bool app_exists(const uint8_t *aid, size_t aid_len);
 extern int register_app(int (*)(app_t *, uint8_t), const uint8_t *);
 extern int select_app(const uint8_t *aid, size_t aid_len);
+/* For transports that enforce their own capability policy (for example BLE). */
+extern int select_app_unchecked(const uint8_t *aid, size_t aid_len);
+extern bool picokey_app_policy(const uint8_t *aid, size_t aid_len);
 
 typedef struct cmd {
     uint8_t ins;
@@ -71,6 +74,8 @@ extern struct apdu apdu;
 extern uint16_t set_res_sw(uint8_t sw1, uint8_t sw2);
 extern int process_apdu();
 extern uint16_t apdu_process(uint8_t, const uint8_t *buffer, uint16_t buffer_size);
+extern void apdu_reset_warm_session(void);
+extern void apdu_reset_session(void);
 extern void apdu_finish();
 extern uint16_t apdu_next();
 extern void *apdu_thread(void *);
