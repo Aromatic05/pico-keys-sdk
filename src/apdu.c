@@ -33,6 +33,26 @@ bool is_chaining = false;
 uint8_t chain_buf[2038];
 uint8_t *chain_ptr = NULL;
 
+void apdu_reset_session(void) {
+    if (current_app && current_app->unload) {
+        current_app->unload();
+    }
+    current_app = NULL;
+    is_chaining = false;
+    chain_ptr = chain_buf;
+    rdata_gr = NULL;
+    rdata_bk = 0;
+    apdu.header = NULL;
+    apdu.data = NULL;
+    apdu.rdata = NULL;
+    apdu.nc = 0;
+    apdu.ne = 0;
+    apdu.sw = 0;
+    apdu.rlen = 0;
+    finished_data_size = 0;
+    timeout_stop();
+}
+
 int process_apdu() {
     led_set_mode(MODE_PROCESSING);
     if (CLA(apdu) & 0x10) {

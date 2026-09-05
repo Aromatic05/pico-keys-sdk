@@ -315,7 +315,11 @@ uint16_t emul_read(uint8_t itf) {
                         }
                         else
 #endif
-                        if (c == 4) {
+                        if (itf == ITF_CCID && (c == 0 || c == 1 || c == 2)) {
+                            /* vpcd: Power Off, Power On, and Reset all start a new card session. */
+                            apdu_reset_session();
+                        }
+                        else if (c == 4) {
                             driver_write_emul(itf, ccid_atr ? ccid_atr + 1 : NULL, ccid_atr ? ccid_atr[0] : 0);
                         }
                     }
