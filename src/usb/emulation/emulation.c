@@ -47,6 +47,10 @@ typedef int socklen_t;
 #include "ccid/ccid.h"
 #include "hid/ctap_hid.h"
 
+#define EMUL_HID_GET_FEATURE_REPORT 5
+#define EMUL_HID_FEATURE_REPORT_SIZE 8
+#define EMUL_HID_REPORT_TYPE_FEATURE 3
+
 socket_t ccid_sock = 0;
 socket_t hid_server_sock = 0;
 socket_t hid_client_sock = INVALID_SOCKET;
@@ -303,6 +307,14 @@ uint16_t emul_read(uint8_t itf) {
                 if (valread > 0) {
                     if (len == 1) {
                         uint8_t c = emul_rx[0];
+#ifdef USB_ITF_HID
+                        if (itf == ITF_HID && c == EMUL_HID_GET_FEATURE_REPORT && ITF_HID_KB != ITF_INVALID) {
+                            uint8_t report[EMUL_HID_FEATURE_REPORT_SIZE] = {0};
+                            tud_hid_get_report_cb(ITF_HID_KB, 0, EMUL_HID_REPORT_TYPE_FEATURE, report, sizeof(report));
+                            driver_write_emul(itf, report, sizeof(report));
+                        }
+                        else
+#endif
                         if (c == 4) {
                             driver_write_emul(itf, ccid_atr ? ccid_atr + 1 : NULL, ccid_atr ? ccid_atr[0] : 0);
                         }
