@@ -498,11 +498,11 @@ int driver_process_usb_packet_hid(uint16_t read) {
             if (last_cmd == CTAPHID_OTP) {
                 is_nk = true;
 #ifdef ENABLE_OATH_APP
-                apdu_select_app(APDU_SESSION_HID, oath_aid + 1, oath_aid[0]);
+                apdu_ensure_app(APDU_SESSION_HID, oath_aid + 1, oath_aid[0]);
 #endif
             }
             else {
-                apdu_select_app(APDU_SESSION_HID, u2f_aid + 1, u2f_aid[0]);
+                apdu_ensure_app(APDU_SESSION_HID, u2f_aid + 1, u2f_aid[0]);
             }
 
             thread_type = 1;

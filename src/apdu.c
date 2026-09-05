@@ -40,13 +40,19 @@ typedef struct apdu_session_state {
 } apdu_session_state_t;
 
 static apdu_session_state_t apdu_sessions[APDU_SESSION_COUNT];
+static apdu_session_id_t active_session_id = APDU_SESSION_CCID;
 static apdu_session_state_t *active_session = &apdu_sessions[APDU_SESSION_CCID];
 
 extern uint32_t timeout;
 
 static void apdu_activate_session(apdu_session_id_t session) {
+    active_session_id = session;
     active_session = &apdu_sessions[session];
     current_app = active_session->selected_app;
+}
+
+apdu_session_id_t apdu_current_session(void) {
+    return active_session_id;
 }
 
 static void apdu_commit_session(void) {
@@ -87,6 +93,17 @@ int apdu_select_app(apdu_session_id_t session, const uint8_t *aid, size_t aid_le
     }
     apdu_commit_session();
     return ret;
+}
+
+int apdu_ensure_app(apdu_session_id_t session, const uint8_t *aid, size_t aid_len) {
+    apdu_activate_session(session);
+    if (current_app && current_app->aid &&
+        aid_len >= current_app->aid[0] &&
+        memcmp(current_app->aid + 1, aid, current_app->aid[0]) == 0 &&
+        picokey_app_policy(current_app->aid + 1, current_app->aid[0])) {
+        return PICOKEY_OK;
+    }
+    return apdu_select_app(session, aid, aid_len);
 }
 
 void apdu_reset_warm_session(apdu_session_id_t session) {

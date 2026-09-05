@@ -79,7 +79,9 @@ typedef enum apdu_session_id {
 extern uint16_t set_res_sw(uint8_t sw1, uint8_t sw2);
 extern int process_apdu();
 extern uint16_t apdu_process(apdu_session_id_t session, uint8_t itf, const uint8_t *buffer, uint16_t buffer_size);
+extern apdu_session_id_t apdu_current_session(void);
 extern int apdu_select_app(apdu_session_id_t session, const uint8_t *aid, size_t aid_len);
+extern int apdu_ensure_app(apdu_session_id_t session, const uint8_t *aid, size_t aid_len);
 extern void apdu_reset_warm_session(apdu_session_id_t session);
 extern void apdu_reset_session(apdu_session_id_t session);
 extern void apdu_finish();
