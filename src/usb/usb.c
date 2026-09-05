@@ -143,6 +143,11 @@ queue_t card_to_usb_q = {0};
 extern tusb_desc_device_t desc_device;
 extern char *string_desc_itf[4], *string_desc_arr[];
 #endif
+
+__attribute__((weak)) uint8_t picokey_usb_interface_policy(uint8_t configured) {
+    return configured;
+}
+
 void usb_init()
 {
 #ifndef ENABLE_EMULATION
@@ -168,6 +173,7 @@ void usb_init()
     if (phy_data.enabled_usb_itf_present) {
         enabled_usb_itf = phy_data.enabled_usb_itf;
     }
+    enabled_usb_itf = picokey_usb_interface_policy(enabled_usb_itf);
 #endif
 
 #ifdef USB_ITF_HID

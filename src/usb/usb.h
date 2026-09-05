@@ -88,6 +88,7 @@ extern uint8_t card_register_interface(uint32_t timeout_ms);
 extern bool card_is_idle();
 extern bool card_is_owned_by(uint8_t itf);
 extern void usb_init();
+extern uint8_t picokey_usb_interface_policy(uint8_t configured);
 
 extern uint16_t finished_data_size;
 extern void usb_set_timeout_counter(uint8_t itf, uint32_t v);
