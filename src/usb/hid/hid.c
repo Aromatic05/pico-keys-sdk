@@ -484,7 +484,7 @@ int driver_process_usb_packet_hid(uint16_t read) {
                   (msg_packet.len == msg_packet.current_len && msg_packet.len > 0))) {
             if (last_cmd == CTAPHID_OTP) {
                 is_nk = true;
-#ifdef ENABLE_OATH_APP
+#if ENABLE_OATH_APP
                 select_app(oath_aid + 1, oath_aid[0]);
 #endif
             }
@@ -595,10 +595,15 @@ void driver_exec_finished_cont_hid(uint8_t itf, uint16_t size_next, uint16_t off
 
 void hid_task() {
 #ifdef ENABLE_EMULATION
-    uint16_t rx_len = emul_read(ITF_HID);
-    if (rx_len) {
+    enum { OTP_FEATURE_REPORT_SIZE = 8, OTP_FEATURE_REPORT_TYPE = 3 };
+    uint16_t rx_len = emul_rx_size ? emul_rx_size : emul_read(ITF_HID);
+    if (rx_len == OTP_FEATURE_REPORT_SIZE && ITF_HID_KB != ITF_INVALID) {
+        tud_hid_set_report_cb(ITF_HID_KB, 0, OTP_FEATURE_REPORT_TYPE, emul_rx, OTP_FEATURE_REPORT_SIZE);
+        emul_rx_size = 0;
+    }
+    else if (rx_len >= 64) {
         uint16_t rptr = 0;
-        while (rx_len > 0) {
+        while (rx_len >= 64) {
             tud_hid_set_report_cb(ITF_HID, 0, 0, emul_rx + rptr, 64);
             rx_len -= 64;
             rptr += 64;
