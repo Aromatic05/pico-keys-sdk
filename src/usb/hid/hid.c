@@ -493,23 +493,25 @@ int driver_process_usb_packet_hid(uint16_t read) {
                 return ctap_error(CTAP1_ERR_CHANNEL_BUSY);
             }
             claimed_here = true;
+            /* APDU response storage belongs to HID even if another transport ran last. */
+            apdu.rdata = ctap_resp->init.data;
             if (last_cmd == CTAPHID_OTP) {
                 is_nk = true;
 #ifdef ENABLE_OATH_APP
-                select_app(oath_aid + 1, oath_aid[0]);
+                apdu_select_app(APDU_SESSION_HID, oath_aid + 1, oath_aid[0]);
 #endif
             }
             else {
-                select_app(u2f_aid + 1, u2f_aid[0]);
+                apdu_select_app(APDU_SESSION_HID, u2f_aid + 1, u2f_aid[0]);
             }
 
             thread_type = 1;
 
             if (msg_packet.current_len == msg_packet.len && msg_packet.len > 0) {
-                apdu_sent = apdu_process(ITF_HID_CTAP, msg_packet.data, msg_packet.len);
+                apdu_sent = apdu_process(APDU_SESSION_HID, ITF_HID_CTAP, msg_packet.data, msg_packet.len);
             }
             else {
-                apdu_sent = apdu_process(ITF_HID_CTAP, ctap_req->init.data, MSG_LEN(ctap_req));
+                apdu_sent = apdu_process(APDU_SESSION_HID, ITF_HID_CTAP, ctap_req->init.data, MSG_LEN(ctap_req));
             }
             DEBUG_PAYLOAD(apdu.data, (int) apdu.nc);
             msg_packet.len = msg_packet.current_len = 0;
@@ -522,7 +524,6 @@ int driver_process_usb_packet_hid(uint16_t read) {
             }
             claimed_here = true;
             thread_type = 2;
-            select_app(fido_aid + 1, fido_aid[0]);
             if (msg_packet.current_len == msg_packet.len && msg_packet.len > 0) {
                 apdu_sent = cbor_process(last_cmd, msg_packet.data, msg_packet.len);
             }

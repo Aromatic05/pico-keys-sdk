@@ -92,7 +92,7 @@ int register_app(int (*select_aid)(app_t *, uint8_t), const uint8_t *aid) {
     return 0;
 }
 
-static int select_app_impl(const uint8_t *aid, size_t aid_len, bool enforce_policy) {
+static int select_app_impl(const uint8_t *aid, size_t aid_len) {
     app_t *candidate = NULL;
     for (int a = 0; a < num_apps; a++) {
         if (aid_matches(apps[a].aid, aid, aid_len) &&
@@ -104,7 +104,7 @@ static int select_app_impl(const uint8_t *aid, size_t aid_len, bool enforce_poli
         return PICOKEY_ERR_FILE_NOT_FOUND;
     }
 
-    if (enforce_policy && !picokey_app_policy(candidate->aid + 1, candidate->aid[0])) {
+    if (!picokey_app_policy(candidate->aid + 1, candidate->aid[0])) {
         if (candidate == current_app) {
             if (current_app->unload) {
                 current_app->unload();
@@ -136,12 +136,9 @@ static int select_app_impl(const uint8_t *aid, size_t aid_len, bool enforce_poli
 }
 
 int select_app(const uint8_t *aid, size_t aid_len) {
-    return select_app_impl(aid, aid_len, true);
+    return select_app_impl(aid, aid_len);
 }
 
-int select_app_unchecked(const uint8_t *aid, size_t aid_len) {
-    return select_app_impl(aid, aid_len, false);
-}
 
 int (*button_pressed_cb)(uint8_t) = NULL;
 

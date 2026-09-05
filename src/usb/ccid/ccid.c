@@ -123,6 +123,10 @@ uint8_t sc_itf_to_usb_itf(uint8_t itf) {
     return itf;
 }
 
+static apdu_session_id_t sc_itf_to_apdu_session(uint8_t itf) {
+    return itf == ITF_SC_WCID ? APDU_SESSION_WCID : APDU_SESSION_CCID;
+}
+
 void ccid_init_buffers() {
     if (ITF_SC_TOTAL == 0) {
         return;
@@ -239,7 +243,7 @@ int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read) {
             }
             else if (ccid_header[itf]->bMessageType == CCID_POWER_ON) {
                 /* A card power cycle starts a fresh authentication/application session. */
-                apdu_reset_session();
+                apdu_reset_session(sc_itf_to_apdu_session(itf));
                 size_t size_atr = (ccid_atr ? ccid_atr[0] : 0);
                 ccid_resp_fast[itf]->bMessageType = CCID_DATA_BLOCK_RET;
                 ccid_resp_fast[itf]->dwLength = (uint32_t)size_atr;
@@ -259,7 +263,7 @@ int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read) {
             }
             else if (ccid_header[itf]->bMessageType == CCID_POWER_OFF) {
                 /* Do not carry PIN/management authentication across ICC power-off. */
-                apdu_reset_session();
+                apdu_reset_session(sc_itf_to_apdu_session(itf));
                 if (ccid_status == 0) {
                     //card_exit(0);
                 }
@@ -315,7 +319,7 @@ int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read) {
                 }
 #endif
                 apdu.rdata = &ccid_response[itf]->apdu;
-                apdu_sent = apdu_process(itf, &ccid_header[itf]->apdu, (uint16_t)ccid_header[itf]->dwLength);
+                apdu_sent = apdu_process(sc_itf_to_apdu_session(itf), itf, &ccid_header[itf]->apdu, (uint16_t)ccid_header[itf]->dwLength);
 #ifndef ENABLE_EMULATION
                 if (apdu_sent > 0) {
                     card_start_claimed(usb_itf, apdu_thread);

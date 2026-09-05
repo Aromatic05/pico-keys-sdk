@@ -317,11 +317,11 @@ uint16_t emul_read(uint8_t itf) {
 #endif
                         if (itf == ITF_CCID && c == 2) {
                             /* vpcd warm reset clears authentication but retains the selected app. */
-                            apdu_reset_warm_session();
+                            apdu_reset_warm_session(APDU_SESSION_CCID);
                         }
                         else if (itf == ITF_CCID && (c == 0 || c == 1)) {
                             /* Power Off/On starts a new card/application session. */
-                            apdu_reset_session();
+                            apdu_reset_session(APDU_SESSION_CCID);
                         }
                         else if (c == 4) {
                             driver_write_emul(itf, ccid_atr ? ccid_atr + 1 : NULL, ccid_atr ? ccid_atr[0] : 0);
@@ -332,7 +332,7 @@ uint16_t emul_read(uint8_t itf) {
                         uint16_t sent = 0;
                         DEBUG_PAYLOAD(emul_rx, len);
                         apdu.rdata = emul_tx;
-                        if ((sent = apdu_process(itf, emul_rx, len)) > 0) {
+                        if ((sent = apdu_process(APDU_SESSION_CCID, itf, emul_rx, len)) > 0) {
                             process_apdu();
                             apdu_finish();
                             if (low_flash_is_pending()) {

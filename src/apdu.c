@@ -26,18 +26,44 @@
 #include "emulation.h"
 #endif
 
-uint8_t *rdata_gr = NULL;
-uint16_t rdata_bk = 0x0;
-extern uint32_t timeout;
-bool is_chaining = false;
-uint8_t chain_buf[2038];
-uint8_t *chain_ptr = NULL;
+#define APDU_CHAIN_BUFFER_SIZE 2038
 
-static void apdu_reset_transport_state(void) {
-    is_chaining = false;
-    chain_ptr = chain_buf;
-    rdata_gr = NULL;
-    rdata_bk = 0;
+typedef struct apdu_session_state {
+    app_t *selected_app;
+    bool is_chaining;
+    uint16_t chain_len;
+    uint8_t chain_buf[APDU_CHAIN_BUFFER_SIZE];
+    uint8_t *response_data;
+    uint8_t *response_next;
+    uint16_t response_backup;
+    uint16_t response_remaining;
+} apdu_session_state_t;
+
+static apdu_session_state_t apdu_sessions[APDU_SESSION_COUNT];
+static apdu_session_state_t *active_session = &apdu_sessions[APDU_SESSION_CCID];
+
+extern uint32_t timeout;
+
+static void apdu_activate_session(apdu_session_id_t session) {
+    active_session = &apdu_sessions[session];
+    current_app = active_session->selected_app;
+}
+
+static void apdu_commit_session(void) {
+    active_session->selected_app = current_app;
+}
+
+static void apdu_clear_response(apdu_session_state_t *session) {
+    session->response_data = NULL;
+    session->response_next = NULL;
+    session->response_backup = 0;
+    session->response_remaining = 0;
+}
+
+static void apdu_reset_transport_state(apdu_session_state_t *session) {
+    session->is_chaining = false;
+    session->chain_len = 0;
+    apdu_clear_response(session);
     /* Request/response storage is transport-owned; do not invalidate it here. */
     apdu.header = NULL;
     apdu.data = NULL;
@@ -49,65 +75,89 @@ static void apdu_reset_transport_state(void) {
     timeout_stop();
 }
 
-void apdu_reset_warm_session(void) {
+int apdu_select_app(apdu_session_id_t session, const uint8_t *aid, size_t aid_len) {
+    apdu_activate_session(session);
+    app_t *previous_app = current_app;
+    int ret = select_app(aid, aid_len);
+    if (ret != PICOKEY_OK && current_app == previous_app && current_app) {
+        if (current_app->unload) {
+            current_app->unload();
+        }
+        current_app = NULL;
+    }
+    apdu_commit_session();
+    return ret;
+}
+
+void apdu_reset_warm_session(apdu_session_id_t session) {
+    apdu_activate_session(session);
     if (current_app && current_app->unload) {
         current_app->unload();
     }
-    apdu_reset_transport_state();
+    apdu_reset_transport_state(active_session);
+    apdu_commit_session();
 }
 
-void apdu_reset_session(void) {
-    apdu_reset_warm_session();
+void apdu_reset_session(apdu_session_id_t session) {
+    apdu_reset_warm_session(session);
     current_app = NULL;
+    apdu_commit_session();
 }
 
 int process_apdu() {
     led_set_mode(MODE_PROCESSING);
+    int result = SW_FILE_NOT_FOUND();
     bool select_by_aid = INS(apdu) == 0xA4 && P1(apdu) == 0x04 &&
         (P2(apdu) == 0x00 || P2(apdu) == 0x04);
+
     if (!select_by_aid && current_app && current_app->aid &&
         !picokey_app_policy(current_app->aid + 1, current_app->aid[0])) {
         if (current_app->unload) {
             current_app->unload();
         }
         current_app = NULL;
-        is_chaining = false;
-        chain_ptr = chain_buf;
-        return SW_INS_NOT_SUPPORTED();
+        active_session->is_chaining = false;
+        active_session->chain_len = 0;
+        result = SW_INS_NOT_SUPPORTED();
+        goto done;
     }
+
     if (CLA(apdu) & 0x10) {
-        if (!is_chaining) {
-            chain_ptr = chain_buf;
+        if (active_session->chain_len + apdu.nc >= sizeof(active_session->chain_buf)) {
+            result = SW_CLA_NOT_SUPPORTED();
+            goto done;
         }
-        if (chain_ptr - chain_buf + apdu.nc >= sizeof(chain_buf)) {
-            return SW_CLA_NOT_SUPPORTED();
-        }
-        memcpy(chain_ptr, apdu.data, apdu.nc);
-        chain_ptr += apdu.nc;
-        is_chaining = true;
-        return SW_OK();
+        memcpy(active_session->chain_buf + active_session->chain_len, apdu.data, apdu.nc);
+        active_session->chain_len += (uint16_t)apdu.nc;
+        active_session->is_chaining = true;
+        result = SW_OK();
+        goto done;
     }
-    else {
-        if (is_chaining) {
-            memmove(apdu.data + (chain_ptr - chain_buf), apdu.data, apdu.nc);
-            memcpy(apdu.data, chain_buf, chain_ptr - chain_buf);
-            apdu.nc += (uint16_t)(chain_ptr - chain_buf);
-            is_chaining = false;
-        }
+
+    if (active_session->is_chaining) {
+        memmove(apdu.data + active_session->chain_len, apdu.data, apdu.nc);
+        memcpy(apdu.data, active_session->chain_buf, active_session->chain_len);
+        apdu.nc += active_session->chain_len;
+        active_session->is_chaining = false;
+        active_session->chain_len = 0;
     }
-    if (select_by_aid) { // select by AID
-        if (select_app(apdu.data, apdu.nc) == PICOKEY_OK) {
-            return SW_OK();
-        }
-        return SW_FILE_NOT_FOUND();
+
+    if (select_by_aid) {
+        result = select_app(apdu.data, apdu.nc) == PICOKEY_OK ? SW_OK() : SW_FILE_NOT_FOUND();
+        goto done;
     }
+
     if (current_app && current_app->process_apdu) {
-        return current_app->process_apdu();
+        result = current_app->process_apdu();
     }
-    return SW_FILE_NOT_FOUND();
+
+done:
+    apdu_commit_session();
+    return result;
 }
 
-uint16_t apdu_process(uint8_t itf, const uint8_t *buffer, uint16_t buffer_size) {
+uint16_t apdu_process(apdu_session_id_t session, uint8_t itf, const uint8_t *buffer, uint16_t buffer_size) {
+    apdu_activate_session(session);
     apdu.header = (uint8_t *) buffer;
     apdu.nc = apdu.ne = 0;
     if (buffer_size == 4) {
@@ -153,63 +203,61 @@ uint16_t apdu_process(uint8_t itf, const uint8_t *buffer, uint16_t buffer_size) 
             }
         }
     }
-    //printf("apdu.nc %u, apdu.ne %u\n",apdu.nc,apdu.ne);
+
     if (apdu.header[1] == 0xc0) {
-        //printf("apdu.ne %u, apdu.rlen %d, bk %x\n",apdu.ne,apdu.rlen,rdata_bk);
         timeout_stop();
-        rdata_gr[0] = rdata_bk >> 8;
-        rdata_gr[1] = rdata_bk & 0xff;
+        apdu.rdata = active_session->response_data;
+        apdu.rlen = active_session->response_remaining;
+        uint8_t *response_next = active_session->response_next;
+        response_next[0] = active_session->response_backup >> 8;
+        response_next[1] = active_session->response_backup & 0xff;
         if (apdu.rlen <= apdu.ne) {
 #ifndef ENABLE_EMULATION
 #ifdef USB_ITF_HID
             if (itf == ITF_HID_CTAP) {
-                driver_exec_finished_cont_hid(itf, apdu.rlen + 2, (uint16_t)(rdata_gr - apdu.rdata));
+                driver_exec_finished_cont_hid(itf, apdu.rlen + 2, (uint16_t)(response_next - apdu.rdata));
             }
 #endif
 #ifdef USB_ITF_CCID
             if (itf == ITF_SC_CCID || itf == ITF_SC_WCID) {
-                driver_exec_finished_cont_ccid(itf, apdu.rlen + 2, (uint16_t)(rdata_gr - apdu.rdata));
+                driver_exec_finished_cont_ccid(itf, apdu.rlen + 2, (uint16_t)(response_next - apdu.rdata));
             }
 #endif
 #else
-            driver_exec_finished_cont_emul(itf, apdu.rlen + 2, (uint16_t)(rdata_gr - apdu.rdata));
+            driver_exec_finished_cont_emul(itf, apdu.rlen + 2, (uint16_t)(response_next - apdu.rdata));
 #endif
-            //Prepare next RAPDU
             apdu.sw = 0;
             apdu.rlen = 0;
-            rdata_gr = apdu.rdata;
+            apdu_clear_response(active_session);
         }
         else {
-            rdata_gr += apdu.ne;
-            rdata_bk = (rdata_gr[0] << 8) | rdata_gr[1];
-            rdata_gr[0] = 0x61;
-            if (apdu.rlen - apdu.ne >= 256) {
-                rdata_gr[1] = 0;
-            }
-            else {
-                rdata_gr[1] = (uint8_t)(apdu.rlen - apdu.ne);
-            }
+            response_next += apdu.ne;
+            active_session->response_backup = (response_next[0] << 8) | response_next[1];
+            response_next[0] = 0x61;
+            response_next[1] = apdu.rlen - apdu.ne >= 256 ? 0 : (uint8_t)(apdu.rlen - apdu.ne);
 #ifndef ENABLE_EMULATION
 #ifdef USB_ITF_HID
             if (itf == ITF_HID_CTAP) {
-                driver_exec_finished_cont_hid(itf, (uint16_t)(apdu.ne + 2), (uint16_t)(rdata_gr - apdu.ne - apdu.rdata));
+                driver_exec_finished_cont_hid(itf, (uint16_t)(apdu.ne + 2), (uint16_t)(response_next - apdu.ne - apdu.rdata));
             }
 #endif
 #ifdef USB_ITF_CCID
             if (itf == ITF_SC_CCID || itf == ITF_SC_WCID) {
-                driver_exec_finished_cont_ccid(itf, (uint16_t)(apdu.ne + 2), (uint16_t)(rdata_gr - apdu.ne - apdu.rdata));
+                driver_exec_finished_cont_ccid(itf, (uint16_t)(apdu.ne + 2), (uint16_t)(response_next - apdu.ne - apdu.rdata));
             }
 #endif
 #else
-            driver_exec_finished_cont_emul(itf, (uint16_t)(apdu.ne + 2), (uint16_t)(rdata_gr - apdu.ne - apdu.rdata));
+            driver_exec_finished_cont_emul(itf, (uint16_t)(apdu.ne + 2), (uint16_t)(response_next - apdu.ne - apdu.rdata));
 #endif
             apdu.rlen -= (uint16_t)apdu.ne;
+            active_session->response_next = response_next;
+            active_session->response_remaining = apdu.rlen;
         }
     }
     else {
         apdu.sw = 0;
         apdu.rlen = 0;
-        rdata_gr = apdu.rdata;
+        apdu_clear_response(active_session);
         return 1;
     }
     return 0;
@@ -252,11 +300,7 @@ done:   ;
         vTaskDelay(pdMS_TO_TICKS(10));
 #endif
     }
-    //printf("EXIT !!!!!!\n");
-    if (current_app && current_app->unload) {
-        current_app->unload();
-        current_app = NULL;
-    }
+    // The worker lifecycle is transport scheduling, not an application session boundary.
     return NULL;
 }
 
@@ -274,21 +318,20 @@ void apdu_finish() {
 uint16_t apdu_next() {
     if (apdu.sw != 0) {
         if (apdu.rlen <= apdu.ne) {
+            apdu_clear_response(active_session);
             return apdu.rlen + 2;
         }
-        else {
-            rdata_gr = apdu.rdata + apdu.ne;
-            rdata_bk = (rdata_gr[0] << 8) | rdata_gr[1];
-            rdata_gr[0] = 0x61;
-            if (apdu.rlen - apdu.ne >= 256) {
-                rdata_gr[1] = 0;
-            }
-            else {
-                rdata_gr[1] = (uint8_t)(apdu.rlen - apdu.ne);
-            }
-            apdu.rlen -= (uint16_t)apdu.ne;
-        }
+
+        uint8_t *response_next = apdu.rdata + apdu.ne;
+        active_session->response_backup = (response_next[0] << 8) | response_next[1];
+        response_next[0] = 0x61;
+        response_next[1] = apdu.rlen - apdu.ne >= 256 ? 0 : (uint8_t)(apdu.rlen - apdu.ne);
+        apdu.rlen -= (uint16_t)apdu.ne;
+        active_session->response_data = apdu.rdata;
+        active_session->response_next = response_next;
+        active_session->response_remaining = apdu.rlen;
         return (uint16_t)(apdu.ne + 2);
     }
+    apdu_clear_response(active_session);
     return 0;
 }
