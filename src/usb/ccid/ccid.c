@@ -30,6 +30,7 @@
 #include "usb_descriptors.h"
 #include "apdu.h"
 #include "usb.h"
+#include <assert.h>
 
 #if MAX_RES_APDU_DATA_SIZE > MAX_CMD_APDU_DATA_SIZE
 #define USB_BUF_SIZE (MAX_RES_APDU_DATA_SIZE + 20 + 9)
@@ -96,9 +97,11 @@ uint8_t ccid_status = 1;
 static uint8_t itf_num;
 #endif
 
-static usb_buffer_t *ccid_rx = NULL, *ccid_tx = NULL, *ccid_request = NULL;
-static uint8_t *ccid_active_seq = NULL;
-static bool *ccid_rx_overflow = NULL;
+static usb_buffer_t ccid_rx[CCID_TRANSPORT_CAPACITY];
+static usb_buffer_t ccid_tx[CCID_TRANSPORT_CAPACITY];
+static usb_buffer_t ccid_request[CCID_TRANSPORT_CAPACITY];
+static uint8_t ccid_active_seq[CCID_TRANSPORT_CAPACITY];
+static bool ccid_rx_overflow[CCID_TRANSPORT_CAPACITY];
 
 int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read);
 
@@ -111,9 +114,9 @@ void ccid_write(uint8_t itf, uint16_t size) {
     ccid_write_offset(itf, size, 0);
 }
 
-ccid_header_t **ccid_response = NULL;
-ccid_header_t **ccid_resp_fast = NULL;
-ccid_header_t **ccid_header = NULL;
+static ccid_header_t *ccid_response[CCID_TRANSPORT_CAPACITY];
+static ccid_header_t *ccid_resp_fast[CCID_TRANSPORT_CAPACITY];
+static ccid_header_t *ccid_header[CCID_TRANSPORT_CAPACITY];
 
 uint8_t sc_itf_to_usb_itf(uint8_t itf) {
     if (itf == ITF_SC_CCID) {
@@ -133,30 +136,15 @@ void ccid_init_buffers() {
     if (ITF_SC_TOTAL == 0) {
         return;
     }
-    if (ccid_rx == NULL) {
-        ccid_rx = (usb_buffer_t *)calloc(ITF_SC_TOTAL, sizeof(usb_buffer_t));
-    }
-    if (ccid_tx == NULL) {
-        ccid_tx = (usb_buffer_t *)calloc(ITF_SC_TOTAL, sizeof(usb_buffer_t));
-    }
-    if (ccid_request == NULL) {
-        ccid_request = (usb_buffer_t *)calloc(ITF_SC_TOTAL, sizeof(usb_buffer_t));
-    }
-    if (ccid_active_seq == NULL) {
-        ccid_active_seq = (uint8_t *)calloc(ITF_SC_TOTAL, sizeof(uint8_t));
-    }
-    if (ccid_rx_overflow == NULL) {
-        ccid_rx_overflow = (bool *)calloc(ITF_SC_TOTAL, sizeof(bool));
-    }
-    if (ccid_header == NULL) {
-        ccid_header = (ccid_header_t **)calloc(ITF_SC_TOTAL, sizeof(ccid_header_t *));
-    }
-    if (ccid_response == NULL) {
-        ccid_response = (ccid_header_t **)calloc(ITF_SC_TOTAL, sizeof(ccid_header_t *));
-    }
-    if (ccid_resp_fast == NULL) {
-        ccid_resp_fast = (ccid_header_t **)calloc(ITF_SC_TOTAL, sizeof(ccid_header_t *));
-    }
+    assert(ITF_SC_TOTAL <= CCID_TRANSPORT_CAPACITY);
+    memset(ccid_rx, 0, sizeof(ccid_rx));
+    memset(ccid_tx, 0, sizeof(ccid_tx));
+    memset(ccid_request, 0, sizeof(ccid_request));
+    memset(ccid_active_seq, 0, sizeof(ccid_active_seq));
+    memset(ccid_rx_overflow, 0, sizeof(ccid_rx_overflow));
+    memset(ccid_header, 0, sizeof(ccid_header));
+    memset(ccid_response, 0, sizeof(ccid_response));
+    memset(ccid_resp_fast, 0, sizeof(ccid_resp_fast));
 }
 
 int driver_init_ccid(uint8_t itf) {
@@ -499,16 +487,18 @@ static void ccid_reset_cb(uint8_t rhport) {
 }
 
 static uint16_t ccid_open(uint8_t rhport, tusb_desc_interface_t const *itf_desc, uint16_t max_len) {
-    uint8_t *itf_vendor = (uint8_t *) malloc(sizeof(uint8_t) * max_len);
     TU_VERIFY( itf_desc->bInterfaceClass == TUSB_CLASS_SMART_CARD && itf_desc->bInterfaceSubClass == 0 && itf_desc->bInterfaceProtocol == 0, 0);
 
     //vendord_open expects a CLASS_VENDOR interface class
     uint16_t const drv_len = sizeof(tusb_desc_interface_t) + sizeof(struct ccid_class_descriptor) + TUSB_SMARTCARD_CCID_EPS * sizeof(tusb_desc_endpoint_t);
-    memcpy(itf_vendor, itf_desc, sizeof(uint8_t) * max_len);
+    TU_VERIFY(max_len >= drv_len, 0);
+    uint8_t itf_vendor[sizeof(tusb_desc_interface_t) + sizeof(struct ccid_class_descriptor) +
+                       TUSB_SMARTCARD_CCID_EPS * sizeof(tusb_desc_endpoint_t)];
+    memcpy(itf_vendor, itf_desc, drv_len);
     ((tusb_desc_interface_t *) itf_vendor)->bInterfaceClass = TUSB_CLASS_VENDOR_SPECIFIC;
 #if TUSB_SMARTCARD_CCID_EPS == 3
     ((tusb_desc_interface_t *) itf_vendor)->bNumEndpoints -= 1;
-    vendord_open(rhport, (tusb_desc_interface_t *)itf_vendor, max_len - sizeof(tusb_desc_endpoint_t));
+    vendord_open(rhport, (tusb_desc_interface_t *)itf_vendor, drv_len - sizeof(tusb_desc_endpoint_t));
     tusb_desc_endpoint_t const *desc_ep = (tusb_desc_endpoint_t const *)((uint8_t *)itf_desc + drv_len - sizeof(tusb_desc_endpoint_t));
     TU_ASSERT(usbd_edpt_open(rhport, desc_ep), 0);
     uint8_t msg[] = { 0x50, 0x03 };
@@ -518,11 +508,8 @@ static uint16_t ccid_open(uint8_t rhport, tusb_desc_interface_t const *itf_desc,
     usbd_edpt_xfer(rhport, desc_ep->bEndpointAddress, msg, sizeof(msg), sizeof(msg));
 #endif
 #else
-    vendord_open(rhport, (tusb_desc_interface_t *)itf_vendor, max_len);
+    vendord_open(rhport, (tusb_desc_interface_t *)itf_vendor, drv_len);
 #endif
-    free(itf_vendor);
-
-    TU_VERIFY(max_len >= drv_len, 0);
 
     itf_num = itf_desc->bInterfaceNumber;
     return drv_len;

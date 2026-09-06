@@ -58,7 +58,7 @@
   #endif
   #include "queue.h"
  #endif
- #define FLASH_SECTOR_SIZE       4096
+ #define FLASH_SECTOR_SIZE       PICO_KEYS_FLASH_SECTOR_SIZE
  #define XIP_BASE 0
  int fd_map = 0;
  uint8_t *map = NULL;

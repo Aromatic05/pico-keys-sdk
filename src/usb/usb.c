@@ -16,6 +16,7 @@
  */
 
 #include <stdio.h>
+#include <assert.h>
 #include "pico_keys.h"
 #if defined(PICO_PLATFORM)
 #include "pico/stdlib.h"
@@ -51,10 +52,9 @@ void tud_resume_cb(void) {
 
 // For memcpy
 #include <string.h>
-#include <stdlib.h>
 
 // Device specific functions
-static uint32_t *timeout_counter = NULL;
+static uint32_t timeout_counter[CARD_INTERFACE_CAPACITY];
 static uint8_t card_locked_itf = 0; // no locked
 static void *(*card_locked_func)(void *) = NULL;
 #ifndef ENABLE_EMULATION
@@ -91,9 +91,11 @@ void usb_set_timeout_counter(uint8_t itf, uint32_t v) {
 }
 
 uint8_t card_register_interface(uint32_t timeout_ms) {
+    if (ITF_TOTAL >= CARD_INTERFACE_CAPACITY) {
+        return ITF_INVALID;
+    }
     bool idle = card_locked_itf == ITF_TOTAL && card_locked_func == NULL;
     uint8_t itf = ITF_TOTAL++;
-    timeout_counter = (uint32_t *)realloc(timeout_counter, ITF_TOTAL * sizeof(uint32_t));
     timeout_counter[itf] = timeout_ms;
     if (idle) {
         card_locked_itf = ITF_TOTAL;
@@ -228,6 +230,7 @@ void usb_init()
     ITF_SC_TOTAL = 0;
 #endif
     ITF_TOTAL = 0;
+    memset(timeout_counter, 0, sizeof(timeout_counter));
 #ifdef USB_ITF_HID
     if (enabled_usb_itf & PHY_USB_ITF_HID) {
         ITF_HID_CTAP = ITF_HID_TOTAL++;
@@ -260,10 +263,8 @@ void usb_init()
 #endif
     }
 #endif
+    assert(ITF_TOTAL <= CARD_INTERFACE_CAPACITY);
     card_locked_itf = ITF_TOTAL;
-    if (timeout_counter == NULL) {
-        timeout_counter = (uint32_t *)calloc(ITF_TOTAL, sizeof(uint32_t));
-    }
 #ifdef USB_ITF_HID
     if (ITF_HID_TOTAL > 0) {
         hid_init();

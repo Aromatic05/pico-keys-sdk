@@ -19,6 +19,7 @@
 #include "crypto_utils.h"
 #include "random.h"
 #include "mbedtls/cmac.h"
+#include "mbedtls/sha1.h"
 #include "asn1.h"
 #include "apdu.h"
 
@@ -36,24 +37,36 @@ bool is_secured_apdu() {
     return CLA(apdu) & 0xC;
 }
 
-void sm_derive_key(const uint8_t *input,
-                   size_t input_len,
-                   uint8_t counter,
-                   const uint8_t *nonce,
-                   size_t nonce_len,
-                   uint8_t *out) {
-    uint8_t *b = (uint8_t *) calloc(1, input_len + nonce_len + 4);
-    if (input) {
-        memcpy(b, input, input_len);
+static void sm_sha1_update(mbedtls_sha1_context *ctx, const uint8_t *data, size_t len) {
+    static const uint8_t zeroes[16] = {0};
+    if (data) {
+        mbedtls_sha1_update(ctx, data, len);
+        return;
     }
-    if (nonce) {
-        memcpy(b + input_len, nonce, nonce_len);
+    while (len > 0) {
+        size_t chunk = len > sizeof(zeroes) ? sizeof(zeroes) : len;
+        mbedtls_sha1_update(ctx, zeroes, chunk);
+        len -= chunk;
     }
-    b[input_len + nonce_len + 3] = counter;
+}
+
+static void sm_derive_key(const uint8_t *input,
+                          size_t input_len,
+                          uint8_t counter,
+                          const uint8_t *nonce,
+                          size_t nonce_len,
+                          uint8_t *out) {
+    const uint8_t suffix[4] = {0, 0, 0, counter};
     uint8_t digest[20];
-    generic_hash(MBEDTLS_MD_SHA1, b, input_len + nonce_len + 4, digest);
+    mbedtls_sha1_context ctx;
+    mbedtls_sha1_init(&ctx);
+    mbedtls_sha1_starts(&ctx);
+    sm_sha1_update(&ctx, input, input_len);
+    sm_sha1_update(&ctx, nonce, nonce_len);
+    mbedtls_sha1_update(&ctx, suffix, sizeof(suffix));
+    mbedtls_sha1_finish(&ctx, digest);
+    mbedtls_sha1_free(&ctx);
     memcpy(out, digest, 16);
-    free(b);
 }
 
 void sm_derive_all_keys(const uint8_t *derived, size_t derived_len) {

@@ -343,10 +343,12 @@ int delete_dynamic_file(file_t *f) {
     }
     for (int i = 0; i < dynamic_files; i++) {
         if (dynamic_file[i].fid == f->fid) {
-            for (int j = i + 1; j < dynamic_files; j++) {
-                memcpy(&dynamic_file[j - 1], &dynamic_file[j], sizeof(file_t));
+            size_t tail = (size_t)(dynamic_files - i - 1);
+            if (tail > 0) {
+                memmove(&dynamic_file[i], &dynamic_file[i + 1], tail * sizeof(file_t));
             }
             dynamic_files--;
+            memset(&dynamic_file[dynamic_files], 0, sizeof(file_t));
             return PICOKEY_OK;
         }
     }
@@ -408,7 +410,6 @@ int meta_delete(uint16_t fid) {
     uint16_t tag = 0x0;
     uint8_t *tag_data = NULL, *p = NULL;
     uint16_t tag_len = 0;
-    uint8_t *fdata = NULL;
     asn1_ctx_t ctxi;
     asn1_ctx_init(file_get_data(ef), file_get_size(ef), &ctxi);
     while (walk_tlv(&ctxi, &p, &tag, &tag_len, &tag_data)) {
@@ -423,15 +424,12 @@ int meta_delete(uint16_t fid) {
                 flash_clear_file(ef);
             }
             else {
-                fdata = (uint8_t *) calloc(1, new_len);
-                if (tpos > ctxi.data) {
-                    memcpy(fdata, ctxi.data, tpos - ctxi.data);
-                }
-                if (ctxi.data + ctxi.len > p) {
-                    memcpy(fdata + (tpos - ctxi.data), p, ctxi.data + ctxi.len - p);
-                }
+                uint8_t fdata[PICO_KEYS_FLASH_SECTOR_SIZE];
+                size_t prefix_len = (size_t)(tpos - ctxi.data);
+                size_t suffix_len = (size_t)(ctxi.data + ctxi.len - p);
+                memcpy(fdata, ctxi.data, prefix_len);
+                memcpy(fdata + prefix_len, p, suffix_len);
                 int r = file_put_data(ef, fdata, new_len);
-                free(fdata);
                 if (r != PICOKEY_OK) {
                     return PICOKEY_EXEC_ERROR;
                 }
@@ -452,15 +450,14 @@ int meta_add(uint16_t fid, const uint8_t *data, uint16_t len) {
         return PICOKEY_ERR_FILE_NOT_FOUND;
     }
     uint16_t ef_size = file_get_size(ef);
-    uint8_t *fdata = NULL;
+    if (ef_size > PICO_KEYS_FLASH_SECTOR_SIZE) {
+        return PICOKEY_ERR_NO_MEMORY;
+    }
+    uint8_t fdata[PICO_KEYS_FLASH_SECTOR_SIZE];
     if (ef_size > 0) {
         const uint8_t *ef_data = file_get_data(ef);
         if (ef_data == NULL) {
             return PICOKEY_EXEC_ERROR;
-        }
-        fdata = (uint8_t *)malloc(ef_size);
-        if (fdata == NULL) {
-            return PICOKEY_ERR_MEMORY_FATAL;
         }
         memcpy(fdata, ef_data, ef_size);
     }
@@ -480,37 +477,29 @@ int meta_add(uint16_t fid, const uint8_t *data, uint16_t len) {
                     memcpy(p - tag_len + 2, data, len);
                 }
                 r = file_put_data(ef, fdata, ef_size);
-                free(fdata);
                 if (r != PICOKEY_OK) {
                     return PICOKEY_EXEC_ERROR;
                 }
                 return PICOKEY_OK;
             }
-            else {   //needs reallocation
+            else {
                 uint8_t *tpos = p - asn1_len_tag(tag, tag_len);
-                memmove(tpos, p, fdata + ef_size - p);
-                tpos += fdata + ef_size - p;
-                volatile uintptr_t meta_offset = tpos - fdata;
-                ef_size += len - (tag_len - 2);
-                if (len > tag_len - 2) {
-                    uint8_t *fdata_new = (uint8_t *) realloc(fdata, ef_size);
-                    if (fdata_new != NULL) {
-                        fdata = fdata_new;
-                    }
-                    else {
-                        free(fdata);
-                        return PICOKEY_ERR_MEMORY_FATAL;
-                    }
+                uint16_t old_tlv_size = asn1_len_tag(tag, tag_len);
+                uint16_t new_tlv_size = asn1_len_tag(fid & 0x1f, len + 2);
+                uint16_t new_size = ef_size - old_tlv_size + new_tlv_size;
+                if (new_size > PICO_KEYS_FLASH_SECTOR_SIZE) {
+                    return PICOKEY_ERR_NO_MEMORY;
                 }
-                uint8_t *f = fdata + meta_offset;
+                size_t suffix_len = (size_t)(fdata + ef_size - p);
+                memmove(tpos + new_tlv_size, p, suffix_len);
+                uint8_t *f = tpos;
                 *f++ = fid & 0xff;
                 f += format_tlv_len(len + 2, f);
                 f += put_uint16_t_be(fid, f);
                 if (len > 0) {
                     memcpy(f, data, len);
                 }
-                r = file_put_data(ef, fdata, ef_size);
-                free(fdata);
+                r = file_put_data(ef, fdata, new_size);
                 if (r != PICOKEY_OK) {
                     return PICOKEY_EXEC_ERROR;
                 }
@@ -519,12 +508,9 @@ int meta_add(uint16_t fid, const uint8_t *data, uint16_t len) {
         }
     }
     uint16_t new_size = ef_size + (uint16_t)asn1_len_tag(fid & 0x1f, len + 2);
-    uint8_t *fdata_new = (uint8_t *)realloc(fdata, new_size);
-    if (fdata_new == NULL) {
-        free(fdata);
-        return PICOKEY_ERR_MEMORY_FATAL;
+    if (new_size > PICO_KEYS_FLASH_SECTOR_SIZE) {
+        return PICOKEY_ERR_NO_MEMORY;
     }
-    fdata = fdata_new;
     uint8_t *f = fdata + ef_size;
     *f++ = fid & 0x1f;
     f += format_tlv_len(len + 2, f);
@@ -533,7 +519,6 @@ int meta_add(uint16_t fid, const uint8_t *data, uint16_t len) {
         memcpy(f, data, len);
     }
     r = file_put_data(ef, fdata, new_size);
-    free(fdata);
     if (r != PICOKEY_OK) {
         return PICOKEY_EXEC_ERROR;
     }

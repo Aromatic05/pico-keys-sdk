@@ -30,13 +30,15 @@ static portMUX_TYPE mutex = portMUX_INITIALIZER_UNLOCKED;
 #include "pico_keys_version.h"
 #include "apdu.h"
 #include "usb.h"
+#include <assert.h>
 
 extern void init_fido();
 bool is_nk = false;
 uint8_t (*get_version_major)() = NULL;
 uint8_t (*get_version_minor)() = NULL;
 
-static usb_buffer_t *hid_rx = NULL, *hid_tx = NULL;
+static usb_buffer_t hid_rx[HID_TRANSPORT_CAPACITY];
+static usb_buffer_t hid_tx[HID_TRANSPORT_CAPACITY];
 
 PACK(
 typedef struct msg_packet {
@@ -47,8 +49,8 @@ typedef struct msg_packet {
 
 msg_packet_t msg_packet = { 0 };
 
-static uint16_t *send_buffer_size = NULL;
-static write_status_t *last_write_result = NULL;
+static uint16_t send_buffer_size[HID_TRANSPORT_CAPACITY];
+static write_status_t last_write_result[HID_TRANSPORT_CAPACITY];
 
 CTAPHID_FRAME *ctap_req = NULL, *ctap_resp = NULL;
 static CTAPHID_FRAME ctap_req_snapshot;
@@ -64,25 +66,22 @@ void hid_init() {
     if (ITF_HID_TOTAL == 0) {
         return;
     }
-    if (send_buffer_size == NULL) {
-        send_buffer_size = (uint16_t *)calloc(ITF_HID_TOTAL, sizeof(uint16_t));
-    }
-    if (last_write_result == NULL) {
-        last_write_result = (write_status_t *)calloc(ITF_HID_TOTAL, sizeof(write_status_t));
-    }
-    if (hid_rx == NULL) {
-        hid_rx = (usb_buffer_t *)calloc(ITF_HID_TOTAL, sizeof(usb_buffer_t));
-    }
-    if (hid_tx == NULL) {
-        hid_tx = (usb_buffer_t *)calloc(ITF_HID_TOTAL, sizeof(usb_buffer_t));
-    }
+    assert(ITF_HID_TOTAL <= HID_TRANSPORT_CAPACITY);
+    memset(send_buffer_size, 0, sizeof(send_buffer_size));
+    memset(last_write_result, 0, sizeof(last_write_result));
+    memset(hid_rx, 0, sizeof(hid_rx));
+    memset(hid_tx, 0, sizeof(hid_tx));
 }
 
 int driver_init_hid() {
 #ifndef ENABLE_EMULATION
     static bool _init = false;
     if (_init == false) {
-        tud_init(BOARD_TUD_RHPORT);
+        const tusb_rhport_init_t rh_init = {
+            .role = TUSB_ROLE_DEVICE,
+            .speed = TUD_OPT_HIGH_SPEED ? TUSB_SPEED_HIGH : TUSB_SPEED_FULL,
+        };
+        tusb_init(BOARD_TUD_RHPORT, &rh_init);
         _init = true;
     }
 #endif

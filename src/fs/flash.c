@@ -19,10 +19,11 @@
 #include <stdint.h>
 #include <string.h>
 #include "pico_keys.h"
+#include "file.h"
 
 #if !defined(PICO_PLATFORM)
 #define XIP_BASE                0
-#define FLASH_SECTOR_SIZE       4096
+#define FLASH_SECTOR_SIZE       PICO_KEYS_FLASH_SECTOR_SIZE
 #ifdef ESP_PLATFORM
 uint32_t FLASH_SIZE_BYTES = (1 * 1024 * 1024);
 #else
@@ -33,7 +34,6 @@ uint32_t FLASH_SIZE_BYTES = (2 * 1024 * 1024);
 #include "pico/stdlib.h"
 #include "hardware/flash.h"
 #endif
-#include "file.h"
 #include <stdio.h>
 
 /*
@@ -145,7 +145,6 @@ int flash_write_data_to_file_offset(file_t *file, const uint8_t *data, uint16_t 
         return PICOKEY_ERR_NULL_PARAM;
     }
     uint16_t size_file_flash = file->data ? flash_read_uint16((uintptr_t) file->data) : 0;
-    uint8_t *old_data = NULL;
     if (offset + len > FLASH_SECTOR_SIZE || offset > size_file_flash) {
         return PICOKEY_ERR_NO_MEMORY;
     }
@@ -157,15 +156,31 @@ int flash_write_data_to_file_offset(file_t *file, const uint8_t *data, uint16_t 
             }
             return PICOKEY_OK;
         }
-        else {   //we clear the old file
-            flash_clear_file(file);
+        else {
+            uint8_t expanded_data[PICO_KEYS_FLASH_SECTOR_SIZE];
             if (offset > 0) {
-                old_data = (uint8_t *) calloc(1, offset + len);
-                memcpy(old_data, flash_read((uintptr_t) (file->data + sizeof(uint16_t))), offset);
-                memcpy(old_data + offset, data, len);
-                len = offset + len;
-                data = old_data;
+                memcpy(expanded_data,
+                       flash_read((uintptr_t)(file->data + sizeof(uint16_t))),
+                       offset);
             }
+            memcpy(expanded_data + offset, data, len);
+            len = offset + len;
+            data = expanded_data;
+            flash_clear_file(file);
+
+            uintptr_t new_addr = allocate_free_addr(len, (file->type & FILE_PERSISTENT) == FILE_PERSISTENT);
+            if (new_addr == 0x0) {
+                return PICOKEY_ERR_NO_MEMORY;
+            }
+            if (new_addr < last_base) {
+                last_base = new_addr;
+            }
+            file->data = (uint8_t *) new_addr + sizeof(uintptr_t) + sizeof(uint16_t) + sizeof(uintptr_t);
+            flash_program_halfword(new_addr + sizeof(uintptr_t) + sizeof(uintptr_t), file->fid);
+            flash_program_halfword((uintptr_t) file->data, len);
+            flash_program_block((uintptr_t) file->data + sizeof(uint16_t), data, len);
+            num_files++;
+            return PICOKEY_OK;
         }
     }
 
@@ -182,9 +197,6 @@ int flash_write_data_to_file_offset(file_t *file, const uint8_t *data, uint16_t 
     flash_program_halfword((uintptr_t) file->data, len);
     if (data) {
         flash_program_block((uintptr_t) file->data + sizeof(uint16_t), data, len);
-    }
-    if (old_data) {
-        free(old_data);
     }
     num_files++;
     return PICOKEY_OK;

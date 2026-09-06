@@ -38,12 +38,10 @@
 }
 #define DEBUG_DATA(_p, _s) {                                                    \
         printf("Data %s (%zu bytes) [%s:%d]:\n", #_p, (size_t)(_s), __FILE__, __LINE__);      \
-        char *_tmp = (char *) calloc(2 * (_s) + 1, sizeof(char)); \
         for (size_t _i = 0; _i < (size_t)(_s); _i++) {    \
-            sprintf(&_tmp[2 * _i], "%02X", (_p)[_i]);       \
+            printf("%02X", (_p)[_i]);                       \
         }                                                \
-        printf("%s\n", _tmp);                             \
-        free(_tmp);                                       \
+        printf("\n");                                    \
     }
 
 #else

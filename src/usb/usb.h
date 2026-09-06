@@ -49,6 +49,11 @@
 
 enum { ITF_INVALID = 0xFF };
 enum { CARD_OWNER_MAINTENANCE = 0xFE };
+enum {
+    HID_TRANSPORT_CAPACITY = 2,
+    CCID_TRANSPORT_CAPACITY = 2,
+    CARD_INTERFACE_CAPACITY = 8,
+};
 
 #ifdef USB_ITF_HID
     extern uint8_t ITF_HID_CTAP, ITF_HID_KB;
