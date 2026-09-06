@@ -444,13 +444,26 @@ int meta_delete(uint16_t fid) {
 }
 int meta_add(uint16_t fid, const uint8_t *data, uint16_t len) {
     int r;
+    if (len > 0 && data == NULL) {
+        return PICOKEY_ERR_NULL_PARAM;
+    }
     file_t *ef = search_file(EF_META);
     if (!ef) {
         return PICOKEY_ERR_FILE_NOT_FOUND;
     }
     uint16_t ef_size = file_get_size(ef);
-    uint8_t *fdata = (uint8_t *) calloc(1, ef_size);
-    memcpy(fdata, file_get_data(ef), ef_size);
+    uint8_t *fdata = NULL;
+    if (ef_size > 0) {
+        const uint8_t *ef_data = file_get_data(ef);
+        if (ef_data == NULL) {
+            return PICOKEY_EXEC_ERROR;
+        }
+        fdata = (uint8_t *)malloc(ef_size);
+        if (fdata == NULL) {
+            return PICOKEY_ERR_MEMORY_FATAL;
+        }
+        memcpy(fdata, ef_data, ef_size);
+    }
     uint16_t tag = 0x0;
     uint8_t *tag_data = NULL, *p = NULL;
     uint16_t tag_len = 0;
@@ -463,7 +476,9 @@ int meta_add(uint16_t fid, const uint8_t *data, uint16_t len) {
         uint16_t cfid = get_uint16_t_be(tag_data);
         if (cfid == fid) {
             if (tag_len - 2 == len) { //an update
-                memcpy(p - tag_len + 2, data, len);
+                if (len > 0) {
+                    memcpy(p - tag_len + 2, data, len);
+                }
                 r = file_put_data(ef, fdata, ef_size);
                 free(fdata);
                 if (r != PICOKEY_OK) {
@@ -491,7 +506,9 @@ int meta_add(uint16_t fid, const uint8_t *data, uint16_t len) {
                 *f++ = fid & 0xff;
                 f += format_tlv_len(len + 2, f);
                 f += put_uint16_t_be(fid, f);
-                memcpy(f, data, len);
+                if (len > 0) {
+                    memcpy(f, data, len);
+                }
                 r = file_put_data(ef, fdata, ef_size);
                 free(fdata);
                 if (r != PICOKEY_OK) {
@@ -501,13 +518,21 @@ int meta_add(uint16_t fid, const uint8_t *data, uint16_t len) {
             }
         }
     }
-    fdata = (uint8_t *) realloc(fdata, ef_size + asn1_len_tag(fid & 0x1f, len + 2));
+    uint16_t new_size = ef_size + (uint16_t)asn1_len_tag(fid & 0x1f, len + 2);
+    uint8_t *fdata_new = (uint8_t *)realloc(fdata, new_size);
+    if (fdata_new == NULL) {
+        free(fdata);
+        return PICOKEY_ERR_MEMORY_FATAL;
+    }
+    fdata = fdata_new;
     uint8_t *f = fdata + ef_size;
     *f++ = fid & 0x1f;
     f += format_tlv_len(len + 2, f);
     f += put_uint16_t_be(fid, f);
-    memcpy(f, data, len);
-    r = file_put_data(ef, fdata, ef_size + (uint16_t)asn1_len_tag(fid & 0x1f, len + 2));
+    if (len > 0) {
+        memcpy(f, data, len);
+    }
+    r = file_put_data(ef, fdata, new_size);
     free(fdata);
     if (r != PICOKEY_OK) {
         return PICOKEY_EXEC_ERROR;

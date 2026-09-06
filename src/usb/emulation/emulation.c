@@ -60,6 +60,10 @@ extern size_t cbor_len;
 extern uint8_t cmd;
 uint8_t emul_rx[USB_BUFFER_SIZE], emul_tx[USB_BUFFER_SIZE];
 uint16_t emul_rx_size = 0, emul_tx_size = 0;
+static uint8_t emul_ccid_request[USB_BUFFER_SIZE];
+static uint16_t emul_ccid_request_size = 0;
+static bool emul_ccid_pending = false;
+static bool emul_ccid_running = false;
 extern int cbor_parse(uint8_t cmd, const uint8_t *data, size_t len);
 extern void do_flash();
 pthread_t hcore0, hcore1;
@@ -317,11 +321,17 @@ uint16_t emul_read(uint8_t itf) {
 #endif
                         if (itf == ITF_CCID && c == 2) {
                             /* vpcd warm reset clears authentication but retains the selected app. */
-                            apdu_reset_warm_session(APDU_SESSION_CCID);
+                            if (card_try_claim(ITF_CCID)) {
+                                apdu_reset_warm_session(APDU_SESSION_CCID);
+                                card_release(ITF_CCID);
+                            }
                         }
                         else if (itf == ITF_CCID && (c == 0 || c == 1)) {
                             /* Power Off/On starts a new card/application session. */
-                            apdu_reset_session(APDU_SESSION_CCID);
+                            if (card_try_claim(ITF_CCID)) {
+                                apdu_reset_session(APDU_SESSION_CCID);
+                                card_release(ITF_CCID);
+                            }
                         }
                         else if (c == 4) {
                             driver_write_emul(itf, ccid_atr ? ccid_atr + 1 : NULL, ccid_atr ? ccid_atr[0] : 0);
@@ -329,20 +339,11 @@ uint16_t emul_read(uint8_t itf) {
                     }
 #ifdef USB_ITF_CCID
                     else if (itf == ITF_CCID) {
-                        uint16_t sent = 0;
                         DEBUG_PAYLOAD(emul_rx, len);
-                        apdu.rdata = emul_tx;
-                        if ((sent = apdu_process(APDU_SESSION_CCID, itf, emul_rx, len)) > 0) {
-                            process_apdu();
-                            apdu_finish();
-                            if (low_flash_is_pending()) {
-                                do_flash();
-                            }
-                        }
-                        if (sent > 0) {
-                            uint16_t ret = apdu_next();
-                            DEBUG_PAYLOAD(apdu.rdata, ret);
-                            driver_write_emul(itf, apdu.rdata, ret);
+                        if (!emul_ccid_pending && !emul_ccid_running && len <= sizeof(emul_ccid_request)) {
+                            memcpy(emul_ccid_request, emul_rx, len);
+                            emul_ccid_request_size = len;
+                            emul_ccid_pending = true;
                         }
                     }
 #endif
@@ -360,9 +361,48 @@ uint16_t emul_read(uint8_t itf) {
     return emul_rx_size;
 }
 
+static void emul_ccid_task(void) {
+#ifdef USB_ITF_CCID
+    if (emul_ccid_running) {
+        int status = card_status(ITF_CCID);
+        if (status == PICOKEY_OK) {
+            uint16_t ret = finished_data_size;
+            DEBUG_PAYLOAD(apdu.rdata, ret);
+            driver_write_emul(ITF_CCID, apdu.rdata, ret);
+            card_release(ITF_CCID);
+            emul_ccid_running = false;
+        }
+        return;
+    }
+
+    if (!emul_ccid_pending || !card_try_claim(ITF_CCID)) {
+        return;
+    }
+
+    apdu.rdata = emul_tx;
+    int sent = apdu_process(APDU_SESSION_CCID, ITF_CCID,
+                            emul_ccid_request, emul_ccid_request_size);
+    if (sent > 0) {
+        if (!card_start_claimed(ITF_CCID, apdu_thread)) {
+            card_release(ITF_CCID);
+            return;
+        }
+        emul_ccid_pending = false;
+        emul_ccid_running = true;
+        usb_send_event(EV_CMD_AVAILABLE);
+    }
+    else {
+        emul_ccid_pending = false;
+        card_release(ITF_CCID);
+    }
+#endif
+}
+
 void emul_task() {
 #ifdef USB_ITF_CCID
+    emul_ccid_task();
     emul_read(ITF_CCID);
+    emul_ccid_task();
 #endif
 #ifdef USB_ITF_HID
     emul_read(ITF_HID);

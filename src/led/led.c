@@ -32,11 +32,11 @@ led_driver_t *led_driver = NULL;
 static uint32_t led_mode = MODE_NOT_MOUNTED;
 
 void led_set_mode(uint32_t mode) {
-    led_mode = mode;
+    __atomic_store_n(&led_mode, mode, __ATOMIC_RELEASE);
 }
 
 uint32_t led_get_mode() {
-    return led_mode;
+    return __atomic_load_n(&led_mode, __ATOMIC_ACQUIRE);
 }
 
 void led_blinking_task() {
@@ -45,14 +45,15 @@ void led_blinking_task() {
     static uint32_t stop_ms = 0;
     static uint32_t last_led_update_ms = 0;
     static uint8_t led_state = false;
+    uint32_t mode = led_get_mode();
     uint8_t state = led_state;
 #ifdef PICO_DEFAULT_LED_PIN_INVERTED
     state = !state;
 #endif
-    uint32_t led_brightness = (led_mode & LED_BTNESS_MASK) >> LED_BTNESS_SHIFT;
-    uint32_t led_color = (led_mode & LED_COLOR_MASK) >> LED_COLOR_SHIFT;
-    uint32_t led_off = (led_mode & LED_OFF_MASK) >> LED_OFF_SHIFT;
-    uint32_t led_on = (led_mode & LED_ON_MASK) >> LED_ON_SHIFT;
+    uint32_t led_brightness = (mode & LED_BTNESS_MASK) >> LED_BTNESS_SHIFT;
+    uint32_t led_color = (mode & LED_COLOR_MASK) >> LED_COLOR_SHIFT;
+    uint32_t led_off = (mode & LED_OFF_MASK) >> LED_OFF_SHIFT;
+    uint32_t led_on = (mode & LED_ON_MASK) >> LED_ON_SHIFT;
 
     float progress = 0;
 
@@ -63,7 +64,7 @@ void led_blinking_task() {
     if (!state) {
         progress = 1. - progress;
     }
-    if (phy_data.opts & PHY_OPT_LED_STEADY) {
+    if (__atomic_load_n(&phy_data.opts, __ATOMIC_ACQUIRE) & PHY_OPT_LED_STEADY) {
         progress = 1;
     }
 

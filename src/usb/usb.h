@@ -48,6 +48,7 @@
 #define EV_BUTTON_PRESSED        32
 
 enum { ITF_INVALID = 0xFF };
+enum { CARD_OWNER_MAINTENANCE = 0xFE };
 
 #ifdef USB_ITF_HID
     extern uint8_t ITF_HID_CTAP, ITF_HID_KB;
@@ -77,18 +78,21 @@ extern void usb_task();
 extern queue_t usb_to_card_q;
 extern queue_t card_to_usb_q;
 
-extern void card_start(uint8_t, void *(*func)(void *));
 extern bool card_try_claim(uint8_t itf);
-extern void card_start_claimed(uint8_t itf, void *(*func)(void *));
+extern bool card_try_claim_maintenance(void);
+extern void card_release_maintenance(void);
+extern bool card_start_claimed(uint8_t itf, void *(*func)(void *));
+extern bool card_exit_claimed(uint8_t itf);
 extern void card_release(uint8_t itf);
 extern bool card_command_is_owned_by(uint8_t itf);
-extern void card_exit();
 extern int card_status(uint8_t itf);
 extern uint8_t card_register_interface(uint32_t timeout_ms);
 extern bool card_is_idle();
 extern bool card_is_owned_by(uint8_t itf);
 extern void usb_init();
 extern uint8_t picokey_usb_interface_policy(uint8_t configured);
+extern void picokey_usb_identity_policy(uint8_t enabled_usb_itf, uint16_t *vid, uint16_t *pid);
+extern uint16_t picokey_usb_device_version_policy(uint16_t configured);
 
 extern uint16_t finished_data_size;
 extern void usb_set_timeout_counter(uint8_t itf, uint32_t v);
@@ -107,6 +111,7 @@ extern void driver_exec_finished_cont_hid(uint8_t itf, uint16_t size_next, uint1
 #ifdef USB_ITF_CCID
 extern void driver_exec_finished_ccid(uint8_t itf, uint16_t size_next);
 extern void driver_exec_finished_cont_ccid(uint8_t itf, uint16_t size_next, uint16_t offset);
+extern uint16_t driver_exec_finished_fast_ccid(uint8_t itf, const uint8_t *data, uint16_t size, uint16_t final_sw, uint16_t remaining);
 #endif
 
 #ifdef ENABLE_EMULATION

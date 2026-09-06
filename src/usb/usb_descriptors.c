@@ -34,6 +34,20 @@
 #define USB_PID   0x619B
 #endif
 
+#if USB_VID == 0x1050
+#define USB_MANUFACTURER_STR "Yubico"
+#define USB_PRODUCT_STR      "YubiKey 5"
+#define USB_FIDO_STR         "YubiKey FIDO"
+#define USB_OTP_STR          "YubiKey OTP"
+#define USB_CCID_STR         "YubiKey CCID"
+#else
+#define USB_MANUFACTURER_STR "LibreKeys"
+#define USB_PRODUCT_STR      "One"
+#define USB_FIDO_STR         "HID Interface"
+#define USB_OTP_STR          "HID Keyboard Interface"
+#define USB_CCID_STR         "CCID OTP FIDO Interface"
+#endif
+
 #if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
 #define USB_BCD   0x0210
 #else
@@ -319,13 +333,13 @@ uint8_t const *tud_descriptor_bos_cb(void) {
 char *string_desc_itf[4] = {0};
 char const *string_desc_arr [] = {
     (const char[]) { 0x09, 0x04 }, // 0: Supported language : English (0x0409)
-    "LibreKeys",                   // 1: Manufacturer
-    "One",                         // 2: Product
+    USB_MANUFACTURER_STR,           // 1: Manufacturer
+    USB_PRODUCT_STR,                // 2: Product
     "11223344",                    // 3: Serials, should use chip ID
     "Config"                       // 4: Vendor Interfaces
-    , "HID Interface"
-    , "HID Keyboard Interface"
-    , "CCID OTP FIDO Interface"
+    , USB_FIDO_STR
+    , USB_OTP_STR
+    , USB_CCID_STR
     , "WebCCID Interface"
 };
 

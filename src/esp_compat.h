@@ -42,7 +42,12 @@ static inline void task_wrapper(void *arg) {
     func(NULL);
     vTaskDelete(NULL);
 }
-#define multicore_launch_func_core1(func) xTaskCreatePinnedToCore(task_wrapper, "core1", 4096*ITF_TOTAL*2, (void *)func, CONFIG_TINYUSB_TASK_PRIORITY - 2, &hcore1, ESP32_CORE1)
+#ifdef CONFIG_PICOKEYS_ESP32_WORKER_STACK_SIZE
+#define PICOKEYS_ESP32_WORKER_STACK_SIZE CONFIG_PICOKEYS_ESP32_WORKER_STACK_SIZE
+#else
+#define PICOKEYS_ESP32_WORKER_STACK_SIZE (4096 * ITF_TOTAL * 2)
+#endif
+#define multicore_launch_func_core1(func) xTaskCreatePinnedToCore(task_wrapper, "core1", PICOKEYS_ESP32_WORKER_STACK_SIZE, (void *)func, CONFIG_TINYUSB_TASK_PRIORITY - 2, &hcore1, ESP32_CORE1)
 #define multicore_reset_core1() do { if (hcore1) { eTaskState e = eTaskGetState(hcore1); if (e <= eSuspended) { vTaskDelete(hcore1); }} }while(0)
 #define sleep_ms(a) vTaskDelay(a / portTICK_PERIOD_MS)
 static inline uint32_t board_millis(void) {

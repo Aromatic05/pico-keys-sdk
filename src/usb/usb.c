@@ -30,6 +30,25 @@
 #include "emulation.h"
 #endif
 
+#ifndef ENABLE_EMULATION
+void tud_mount_cb(void) {
+    led_set_mode(MODE_MOUNTED);
+}
+
+void tud_umount_cb(void) {
+    led_set_mode(MODE_NOT_MOUNTED);
+}
+
+void tud_suspend_cb(bool remote_wakeup_en) {
+    (void)remote_wakeup_en;
+    led_set_mode(MODE_SUSPENDED);
+}
+
+void tud_resume_cb(void) {
+    led_set_mode(MODE_MOUNTED);
+}
+#endif
+
 // For memcpy
 #include <string.h>
 #include <stdlib.h>
@@ -112,6 +131,14 @@ bool card_try_claim(uint8_t itf) {
     return claimed;
 }
 
+bool card_try_claim_maintenance(void) {
+    return card_try_claim(CARD_OWNER_MAINTENANCE);
+}
+
+void card_release_maintenance(void) {
+    card_release(CARD_OWNER_MAINTENANCE);
+}
+
 void card_release(uint8_t itf) {
 #ifndef ENABLE_EMULATION
     mutex_enter_blocking(&card_state_mutex);
@@ -148,6 +175,16 @@ __attribute__((weak)) uint8_t picokey_usb_interface_policy(uint8_t configured) {
     return configured;
 }
 
+__attribute__((weak)) void picokey_usb_identity_policy(uint8_t enabled_usb_itf, uint16_t *vid, uint16_t *pid) {
+    (void)enabled_usb_itf;
+    (void)vid;
+    (void)pid;
+}
+
+__attribute__((weak)) uint16_t picokey_usb_device_version_policy(uint16_t configured) {
+    return configured;
+}
+
 void usb_init()
 {
 #ifndef ENABLE_EMULATION
@@ -174,6 +211,14 @@ void usb_init()
         enabled_usb_itf = phy_data.enabled_usb_itf;
     }
     enabled_usb_itf = picokey_usb_interface_policy(enabled_usb_itf);
+    uint16_t usb_vid = desc_device.idVendor;
+    uint16_t usb_pid = desc_device.idProduct;
+    picokey_usb_identity_policy(enabled_usb_itf, &usb_vid, &usb_pid);
+    desc_device.idVendor = usb_vid;
+    desc_device.idProduct = usb_pid;
+    desc_device.bcdDevice = picokey_usb_device_version_policy(desc_device.bcdDevice);
+    phy_data.vid = usb_vid;
+    phy_data.pid = usb_pid;
 #endif
 
 #ifdef USB_ITF_HID
@@ -269,27 +314,49 @@ void card_init_core1() {
 
 uint16_t finished_data_size = 0;
 
-void card_start(uint8_t itf, void *(*func)(void *)) {
+static void card_exit_unchecked(void);
+
+static bool card_start(uint8_t itf, void *(*func)(void *)) {
     timeout_start();
     if (card_locked_itf != itf || card_locked_func != func) {
         if (card_locked_itf != ITF_TOTAL || card_locked_func != NULL) {
-            card_exit();
+            card_exit_unchecked();
         }
         if (func) {
             multicore_reset_core1();
+#ifdef ESP_PLATFORM
+            if (multicore_launch_func_core1(func) != pdPASS) {
+                hcore1 = NULL;
+                timeout_stop();
+                return false;
+            }
+#else
             multicore_launch_func_core1(func);
+#endif
         }
         led_set_mode(MODE_MOUNTED);
         card_locked_itf = itf;
         card_locked_func = func;
     }
+    return true;
 }
 
-void card_start_claimed(uint8_t itf, void *(*func)(void *)) {
-    card_start(itf, func);
+bool card_start_claimed(uint8_t itf, void *(*func)(void *)) {
+    if (!card_command_is_owned_by(itf)) {
+        return false;
+    }
+    return card_start(itf, func);
 }
 
-void card_exit() {
+bool card_exit_claimed(uint8_t itf) {
+    if (!card_command_is_owned_by(itf)) {
+        return false;
+    }
+    card_exit_unchecked();
+    return true;
+}
+
+static void card_exit_unchecked(void) {
     if (card_locked_itf != ITF_TOTAL || card_locked_func != NULL) {
         usb_send_event(EV_EXIT);
         uint32_t m;
@@ -348,8 +415,11 @@ int card_status(uint8_t itf) {
         if (has_m) {
             if (m == EV_EXEC_FINISHED) {
                 if (low_flash_is_pending()) {
-                    queue_try_add(&card_to_usb_q, &m);
-                    return PICOKEY_ERR_FILE_NOT_FOUND;
+                    do_flash();
+                    if (low_flash_is_pending()) {
+                        queue_try_add(&card_to_usb_q, &m);
+                        return PICOKEY_ERR_FILE_NOT_FOUND;
+                    }
                 }
                 timeout_stop();
                 led_set_mode(MODE_MOUNTED);

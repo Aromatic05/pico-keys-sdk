@@ -27,16 +27,17 @@
 #endif
 
 #define APDU_CHAIN_BUFFER_SIZE 2038
+#define APDU_RESPONSE_BUFFER_SIZE 2064
 
 typedef struct apdu_session_state {
     app_t *selected_app;
     bool is_chaining;
     uint16_t chain_len;
     uint8_t chain_buf[APDU_CHAIN_BUFFER_SIZE];
-    uint8_t *response_data;
-    uint8_t *response_next;
-    uint16_t response_backup;
+    uint8_t response_buf[APDU_RESPONSE_BUFFER_SIZE];
+    uint16_t response_offset;
     uint16_t response_remaining;
+    uint16_t response_sw;
 } apdu_session_state_t;
 
 static apdu_session_state_t apdu_sessions[APDU_SESSION_COUNT];
@@ -60,10 +61,26 @@ static void apdu_commit_session(void) {
 }
 
 static void apdu_clear_response(apdu_session_state_t *session) {
-    session->response_data = NULL;
-    session->response_next = NULL;
-    session->response_backup = 0;
+    session->response_offset = 0;
     session->response_remaining = 0;
+    session->response_sw = 0;
+}
+
+static void apdu_send_continuation(uint8_t itf, uint16_t size) {
+#ifndef ENABLE_EMULATION
+#ifdef USB_ITF_HID
+    if (itf == ITF_HID_CTAP) {
+        driver_exec_finished_cont_hid(itf, size, 0);
+    }
+#endif
+#ifdef USB_ITF_CCID
+    if (itf == ITF_SC_CCID || itf == ITF_SC_WCID) {
+        driver_exec_finished_cont_ccid(itf, size, 0);
+    }
+#endif
+#else
+    driver_exec_finished_cont_emul(itf, size, 0);
+#endif
 }
 
 static void apdu_reset_transport_state(apdu_session_state_t *session) {
@@ -223,52 +240,46 @@ uint16_t apdu_process(apdu_session_id_t session, uint8_t itf, const uint8_t *buf
 
     if (apdu.header[1] == 0xc0) {
         timeout_stop();
-        apdu.rdata = active_session->response_data;
-        apdu.rlen = active_session->response_remaining;
-        uint8_t *response_next = active_session->response_next;
-        response_next[0] = active_session->response_backup >> 8;
-        response_next[1] = active_session->response_backup & 0xff;
-        if (apdu.rlen <= apdu.ne) {
+        uint16_t chunk = active_session->response_remaining;
+        if ((uint32_t)chunk > apdu.ne) {
+            chunk = (uint16_t)apdu.ne;
+        }
 #ifndef ENABLE_EMULATION
-#ifdef USB_ITF_HID
-            if (itf == ITF_HID_CTAP) {
-                driver_exec_finished_cont_hid(itf, apdu.rlen + 2, (uint16_t)(response_next - apdu.rdata));
-            }
-#endif
 #ifdef USB_ITF_CCID
-            if (itf == ITF_SC_CCID || itf == ITF_SC_WCID) {
-                driver_exec_finished_cont_ccid(itf, apdu.rlen + 2, (uint16_t)(response_next - apdu.rdata));
+        if (itf == ITF_SC_CCID || itf == ITF_SC_WCID) {
+            uint16_t sent = driver_exec_finished_fast_ccid(
+                itf,
+                active_session->response_buf + active_session->response_offset,
+                chunk,
+                active_session->response_sw,
+                active_session->response_remaining);
+            active_session->response_offset += sent;
+            active_session->response_remaining -= sent;
+            apdu.sw = 0;
+            apdu.rlen = 0;
+            if (active_session->response_remaining == 0) {
+                apdu_clear_response(active_session);
             }
+            return 0;
+        }
 #endif
-#else
-            driver_exec_finished_cont_emul(itf, apdu.rlen + 2, (uint16_t)(response_next - apdu.rdata));
 #endif
+        memcpy(apdu.rdata,
+               active_session->response_buf + active_session->response_offset,
+               chunk);
+        active_session->response_offset += chunk;
+        active_session->response_remaining -= chunk;
+        if (active_session->response_remaining == 0) {
+            put_uint16_t_be(active_session->response_sw, apdu.rdata + chunk);
+            apdu_send_continuation(itf, chunk + 2);
             apdu.sw = 0;
             apdu.rlen = 0;
             apdu_clear_response(active_session);
         }
         else {
-            response_next += apdu.ne;
-            active_session->response_backup = (response_next[0] << 8) | response_next[1];
-            response_next[0] = 0x61;
-            response_next[1] = apdu.rlen - apdu.ne >= 256 ? 0 : (uint8_t)(apdu.rlen - apdu.ne);
-#ifndef ENABLE_EMULATION
-#ifdef USB_ITF_HID
-            if (itf == ITF_HID_CTAP) {
-                driver_exec_finished_cont_hid(itf, (uint16_t)(apdu.ne + 2), (uint16_t)(response_next - apdu.ne - apdu.rdata));
-            }
-#endif
-#ifdef USB_ITF_CCID
-            if (itf == ITF_SC_CCID || itf == ITF_SC_WCID) {
-                driver_exec_finished_cont_ccid(itf, (uint16_t)(apdu.ne + 2), (uint16_t)(response_next - apdu.ne - apdu.rdata));
-            }
-#endif
-#else
-            driver_exec_finished_cont_emul(itf, (uint16_t)(apdu.ne + 2), (uint16_t)(response_next - apdu.ne - apdu.rdata));
-#endif
-            apdu.rlen -= (uint16_t)apdu.ne;
-            active_session->response_next = response_next;
-            active_session->response_remaining = apdu.rlen;
+            apdu.rdata[chunk] = 0x61;
+            apdu.rdata[chunk + 1] = active_session->response_remaining >= 256 ? 0 : (uint8_t)active_session->response_remaining;
+            apdu_send_continuation(itf, chunk + 2);
         }
     }
     else {
@@ -339,14 +350,13 @@ uint16_t apdu_next() {
             return apdu.rlen + 2;
         }
 
-        uint8_t *response_next = apdu.rdata + apdu.ne;
-        active_session->response_backup = (response_next[0] << 8) | response_next[1];
-        response_next[0] = 0x61;
-        response_next[1] = apdu.rlen - apdu.ne >= 256 ? 0 : (uint8_t)(apdu.rlen - apdu.ne);
+        memcpy(active_session->response_buf, apdu.rdata, apdu.rlen);
+        active_session->response_offset = (uint16_t)apdu.ne;
         apdu.rlen -= (uint16_t)apdu.ne;
-        active_session->response_data = apdu.rdata;
-        active_session->response_next = response_next;
         active_session->response_remaining = apdu.rlen;
+        active_session->response_sw = apdu.sw;
+        apdu.rdata[apdu.ne] = 0x61;
+        apdu.rdata[apdu.ne + 1] = apdu.rlen >= 256 ? 0 : (uint8_t)apdu.rlen;
         return (uint16_t)(apdu.ne + 2);
     }
     apdu_clear_response(active_session);

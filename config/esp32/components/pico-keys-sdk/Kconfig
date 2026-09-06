@@ -21,4 +21,23 @@ config PICOKEYS_ESP32_REQUIRE_PROVISIONED_KEYS
         provisioned as readable USER keys with key and purpose write locks.
         The firmware will never generate or burn these keys in this mode.
 
+config PICOKEYS_ESP32_WORKER_STACK_SIZE
+    int "Card worker task stack size"
+    default 16384
+    range 8192 32768
+    depends on IDF_TARGET_ESP32S3
+    help
+        Stack size in bytes for the transient APDU/CBOR worker task on ESP32-S3.
+        Keep this independent of the number of USB interfaces; interface count
+        is not a measure of cryptographic worker stack demand.
+
+config PICOKEYS_ESP32_CORE_STACK_SIZE
+    int "Main service task stack size"
+    default 16384
+    range 8192 32768
+    depends on IDF_TARGET_ESP32S3
+    help
+        Stack size in bytes for the long-lived USB/button/flash service task on
+        ESP32-S3. Keep it independent of the number of USB interfaces.
+
 endmenu

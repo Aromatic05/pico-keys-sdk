@@ -147,10 +147,22 @@ void execute_tasks();
 static bool req_button_pending = false;
 
 bool is_req_button_pending() {
-    return req_button_pending;
+    return __atomic_load_n(&req_button_pending, __ATOMIC_ACQUIRE);
 }
 
-bool cancel_button = false;
+static bool cancel_button = false;
+
+void button_cancel_request(void) {
+    __atomic_store_n(&cancel_button, true, __ATOMIC_RELEASE);
+}
+
+void button_cancel_clear(void) {
+    __atomic_store_n(&cancel_button, false, __ATOMIC_RELEASE);
+}
+
+bool button_cancel_is_requested(void) {
+    return __atomic_load_n(&cancel_button, __ATOMIC_ACQUIRE);
+}
 
 #ifdef _MSC_VER
 #include <windows.h>
@@ -246,22 +258,28 @@ bool wait_button() {
     }
     uint32_t start_button = board_millis();
     bool timeout = false;
-    cancel_button = false;
+    button_cancel_clear();
     uint32_t led_mode = led_get_mode();
     led_set_mode(MODE_BUTTON);
-    req_button_pending = true;
-    while (picok_board_button_read() == false && cancel_button == false) {
-        execute_tasks();
-        //sleep_ms(10);
+    __atomic_store_n(&req_button_pending, true, __ATOMIC_RELEASE);
+    while (picok_board_button_read() == false && !button_cancel_is_requested()) {
+#if defined(ESP_PLATFORM)
+        vTaskDelay(1);
+#elif defined(PICO_PLATFORM)
+        sleep_ms(1);
+#endif
         if (start_button + button_timeout < board_millis()) { /* timeout */
             timeout = true;
             break;
         }
     }
     if (!timeout) {
-        while (picok_board_button_read() == true && cancel_button == false) {
-            execute_tasks();
-            //sleep_ms(10);
+        while (picok_board_button_read() == true && !button_cancel_is_requested()) {
+#if defined(ESP_PLATFORM)
+            vTaskDelay(1);
+#elif defined(PICO_PLATFORM)
+            sleep_ms(1);
+#endif
             if (start_button + 15000 < board_millis()) { /* timeout */
                 timeout = true;
                 break;
@@ -269,8 +287,8 @@ bool wait_button() {
         }
     }
     led_set_mode(led_mode);
-    req_button_pending = false;
-    return timeout || cancel_button;
+    __atomic_store_n(&req_button_pending, false, __ATOMIC_RELEASE);
+    return timeout || button_cancel_is_requested();
 }
 
 __attribute__((weak)) int picokey_init() {
@@ -339,7 +357,10 @@ void core0_loop() {
     while (1) {
         execute_tasks();
         hwrng_task();
-        do_flash();
+        if (low_flash_is_pending() && card_try_claim_maintenance()) {
+            do_flash();
+            card_release_maintenance();
+        }
 #ifndef ENABLE_EMULATION
         if (button_pressed_cb && board_millis() > 1000 && !is_busy()) { // wait 1 second to boot up
             bool current_button_state = picok_board_button_read();
@@ -427,6 +448,7 @@ int main(void) {
 #ifdef ESP_PLATFORM
     gpio_pad_select_gpio(BOOT_PIN);
     gpio_set_direction(BOOT_PIN, GPIO_MODE_INPUT);
+    gpio_pullup_en(BOOT_PIN);
     gpio_pulldown_dis(BOOT_PIN);
 
     tusb_cfg.string_descriptor[3] = pico_serial_str;
@@ -455,7 +477,12 @@ int main(void) {
 #endif
 
 #ifdef ESP_PLATFORM
-    xTaskCreatePinnedToCore(core0_loop, "core0", 4096*ITF_TOTAL*2, NULL, CONFIG_TINYUSB_TASK_PRIORITY - 1, &hcore0, ESP32_CORE0);
+    if (xTaskCreatePinnedToCore(core0_loop, "core0", CONFIG_PICOKEYS_ESP32_CORE_STACK_SIZE,
+                               NULL, CONFIG_TINYUSB_TASK_PRIORITY - 1, &hcore0,
+                               ESP32_CORE0) != pdPASS) {
+        printf("core0 task creation failed\n");
+        return 1;
+    }
 #else
     core0_loop();
 #endif
