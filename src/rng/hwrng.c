@@ -21,6 +21,7 @@
 
 #if defined(PICO_PLATFORM)
 #include "pico/stdlib.h"
+#include "pico/mutex.h"
 #include "hwrng.h"
 #include "bsp/board.h"
 #include "pico/rand.h"
@@ -33,6 +34,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include "board.h"
+#include "queue.h"
 #endif
 
 void hwrng_start() {
@@ -45,6 +47,7 @@ void hwrng_start() {
 
 static uint64_t random_word = 0xcbf29ce484222325;
 static uint8_t hwrng_mix_round = 0;
+static mutex_t hwrng_mutex;
 
 static void hwrng_mix_init() {
     random_word = 0xcbf29ce484222325;
@@ -124,6 +127,7 @@ void *hwrng_task() {
 
     int n;
 
+    mutex_enter_blocking(&hwrng_mutex);
     if ((n = hwrng_mix_process())) {
         const uint32_t *vp = (const uint32_t *) &random_word;
 
@@ -134,34 +138,46 @@ void *hwrng_task() {
             }
         }
     }
+    mutex_exit(&hwrng_mutex);
     return NULL;
 }
 
 void hwrng_init(uint32_t *buf, uint8_t size) {
     struct hwrng_buf *rb = &ring_buffer;
 
+    mutex_init(&hwrng_mutex);
+    mutex_enter_blocking(&hwrng_mutex);
     hwrng_buf_init(rb, buf, size);
 
     hwrng_start();
 
     hwrng_mix_init();
+    mutex_exit(&hwrng_mutex);
 }
 
 void hwrng_flush(void) {
     struct hwrng_buf *rb = &ring_buffer;
+    mutex_enter_blocking(&hwrng_mutex);
     while (!rb->empty) {
         hwrng_buf_del(rb);
     }
+    mutex_exit(&hwrng_mutex);
 }
 
 uint32_t hwrng_get() {
     struct hwrng_buf *rb = &ring_buffer;
     uint32_t v;
 
-    while (rb->empty) {
+    while (1) {
+        mutex_enter_blocking(&hwrng_mutex);
+        if (!rb->empty) {
+            v = hwrng_buf_del(rb);
+            mutex_exit(&hwrng_mutex);
+            break;
+        }
+        mutex_exit(&hwrng_mutex);
         hwrng_task();
     }
-    v = hwrng_buf_del(rb);
 
     return v;
 }
@@ -173,7 +189,13 @@ void hwrng_wait_full() {
 #elif defined(PICO_PLATFORM)
     uint core = get_core_num();
 #endif
-    while (!rb->full) {
+    while (1) {
+        mutex_enter_blocking(&hwrng_mutex);
+        bool full = rb->full;
+        mutex_exit(&hwrng_mutex);
+        if (full) {
+            break;
+        }
 #if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
         if (core == 1) {
             sleep_ms(1);

@@ -58,7 +58,7 @@
   #endif
   #include "queue.h"
  #endif
- #define FLASH_SECTOR_SIZE       4096
+ #define FLASH_SECTOR_SIZE       PICO_KEYS_FLASH_SECTOR_SIZE
  #define XIP_BASE 0
  int fd_map = 0;
  uint8_t *map = NULL;
@@ -246,6 +246,13 @@ void low_flash_available() {
     mutex_enter_blocking(&mtx_flash);
     flash_available = true;
     mutex_exit(&mtx_flash);
+}
+
+bool low_flash_is_pending() {
+    mutex_enter_blocking(&mtx_flash);
+    bool pending = flash_available && ready_pages > 0;
+    mutex_exit(&mtx_flash);
+    return pending;
 }
 
 page_flash_t *find_free_page(uintptr_t addr) {
