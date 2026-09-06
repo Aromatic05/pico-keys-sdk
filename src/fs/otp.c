@@ -87,6 +87,8 @@ static void otp_lock_page(uint8_t page) {
 #endif
 
 #ifdef ESP_PLATFORM
+#include "esp_secure_boot.h"
+#include "esp_efuse_table.h"
 
 uint8_t _otp_key_1[32] = {0};
 uint8_t _otp_key_2[32] = {0};
@@ -151,7 +153,25 @@ bool otp_is_secure_boot_enabled(uint8_t *bootkey) {
     }
     return true;
 #elif defined(ESP_PLATFORM)
-    // TODO: Implement secure boot check for ESP32-S3
+    if (!esp_secure_boot_enabled()) {
+        return false;
+    }
+    if (bootkey) {
+        *bootkey = 0xFF;
+        const esp_efuse_purpose_t purposes[] = {
+            ESP_EFUSE_KEY_PURPOSE_SECURE_BOOT_DIGEST0,
+            ESP_EFUSE_KEY_PURPOSE_SECURE_BOOT_DIGEST1,
+            ESP_EFUSE_KEY_PURPOSE_SECURE_BOOT_DIGEST2,
+        };
+        for (size_t i = 0; i < sizeof(purposes) / sizeof(purposes[0]); i++) {
+            esp_efuse_block_t block = EFUSE_BLK_MAX;
+            if (esp_efuse_find_purpose(purposes[i], &block)) {
+                *bootkey = (uint8_t)(block - EFUSE_BLK_KEY0);
+                break;
+            }
+        }
+    }
+    return true;
 #endif
     return false;
 }
@@ -174,7 +194,13 @@ bool otp_is_secure_boot_locked() {
     }
     return bootkey_idx != 0xFF;
 #elif defined(ESP_PLATFORM)
-    // TODO: Implement secure boot lock check for ESP32-S3
+    size_t soft_jtag_disabled = 0;
+    if (esp_efuse_read_field_cnt(ESP_EFUSE_SOFT_DIS_JTAG, &soft_jtag_disabled) != ESP_OK) {
+        return false;
+    }
+    return esp_efuse_read_field_bit(ESP_EFUSE_DIS_PAD_JTAG)
+        && esp_efuse_read_field_bit(ESP_EFUSE_DIS_USB_JTAG)
+        && soft_jtag_disabled == ESP_EFUSE_SOFT_DIS_JTAG[0]->bit_count;
 #endif
     return false;
 }
@@ -224,7 +250,9 @@ int otp_enable_secure_boot(uint8_t bootkey, bool secure_lock) {
         PICOKEY_CHECK(otp_write_data_raw(OTP_DATA_PAGE2_LOCK1_ROW, flagsp2, sizeof(flagsp2)));
     }
 #elif defined(ESP_PLATFORM)
-    // TODO: Implement secure boot for ESP32-S3
+    (void)bootkey;
+    (void)secure_lock;
+    return ESP_ERR_NOT_SUPPORTED;
 #else
     (void)bootkey;
     (void)secure_lock;
@@ -289,7 +317,7 @@ void otp_migrate_chaff() {
 }
 #endif
 
-void init_otp_files() {
+int init_otp_files() {
 
 #ifdef PICO_RP2350
     otp_migrate_chaff();
@@ -300,6 +328,21 @@ void init_otp_files() {
     memset(_otp_key_2, 0xBE, sizeof(_otp_key_2));
     otp_key_1 = _otp_key_1;
     otp_key_2 = _otp_key_2;
+#elif defined(ESP_PLATFORM) && defined(CONFIG_PICOKEYS_ESP32_REQUIRE_PROVISIONED_KEYS)
+    const esp_efuse_block_t required_keys[] = {OTP_KEY_1, OTP_KEY_2};
+    for (size_t i = 0; i < sizeof(required_keys) / sizeof(required_keys[0]); i++) {
+        const esp_efuse_block_t block = required_keys[i];
+        if (OTP_EMTPY(block, 32)
+            || esp_efuse_get_key_purpose(block) != ESP_EFUSE_KEY_PURPOSE_USER
+            || !esp_efuse_get_key_dis_write(block)
+            || !esp_efuse_get_keypurpose_dis_write(block)
+            || esp_efuse_get_key_dis_read(block)) {
+            printf("Required ESP32 root key block %d is not provisioned correctly\n", block);
+            return PICOKEY_ERR_PROVISIONING_REQUIRED;
+        }
+    }
+    OTP_READ(OTP_KEY_1, otp_key_1);
+    OTP_READ(OTP_KEY_2, otp_key_2);
 #elif defined(PICO_RP2350) || defined(ESP_PLATFORM)
     otp_ret_t ret = 0;
     uint16_t write_otp[2] = {0xFFFF, 0xFFFF};
@@ -363,4 +406,5 @@ void init_otp_files() {
     otp_key_1 = _otp1;
     otp_key_2 = _otp2;
 #endif
+    return PICOKEY_OK;
 }

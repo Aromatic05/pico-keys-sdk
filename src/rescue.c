@@ -337,7 +337,7 @@ int cmd_read() {
     return SW_OK();
 }
 
-#if defined(PICO_RP2350) || defined(ESP_PLATFORM)
+#ifdef PICO_RP2350
 int cmd_secure() {
     if (apdu.nc != 0) {
         return SW_WRONG_LENGTH();
@@ -386,7 +386,7 @@ int cmd_reboot_bootsel() {
 static const cmd_t cmds[] = {
     { INS_KEYDEV_SIGN, cmd_keydev_sign },
     { INS_WRITE, cmd_write },
-#if defined(PICO_RP2350) || defined(ESP_PLATFORM)
+#ifdef PICO_RP2350
     { INS_SECURE, cmd_secure },
 #endif
     { INS_READ, cmd_read },
