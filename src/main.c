@@ -242,7 +242,12 @@ bool picok_board_button_read(void) {
     return true; // always unpressed
 }
 #endif
+#define BUTTON_DEBOUNCE_MS 40U
+#define BUTTON_MULTI_PRESS_WINDOW_MS 1000U
+
 bool button_pressed_state = false;
+bool button_raw_state = false;
+uint32_t button_raw_changed_time = 0;
 uint32_t button_pressed_time = 0;
 uint8_t button_press = 0;
 bool wait_button() {
@@ -363,21 +368,34 @@ void core0_loop() {
         }
 #ifndef ENABLE_EMULATION
         if (button_pressed_cb && board_millis() > 1000 && !is_busy()) { // wait 1 second to boot up
-            bool current_button_state = picok_board_button_read();
-            if (current_button_state != button_pressed_state) {
-                if (current_button_state == false) { // unpressed
-                    if (button_pressed_time == 0 || button_pressed_time + 1000 > board_millis()) {
+            uint32_t now = board_millis();
+            bool raw_button_state = picok_board_button_read();
+            if (raw_button_state != button_raw_state) {
+                button_raw_state = raw_button_state;
+                button_raw_changed_time = now;
+            }
+            if (button_raw_state != button_pressed_state &&
+                now - button_raw_changed_time >= BUTTON_DEBOUNCE_MS) {
+                button_pressed_state = button_raw_state;
+                if (button_pressed_state == false) { // stable release
+                    if (button_pressed_time == 0 ||
+                        now - button_pressed_time >= BUTTON_MULTI_PRESS_WINDOW_MS) {
+                        button_press = 1;
+                    }
+                    else if (button_press < UINT8_MAX) {
                         button_press++;
                     }
-                    button_pressed_time = board_millis();
+                    button_pressed_time = now;
                 }
-                button_pressed_state = current_button_state;
             }
-            if (button_pressed_time > 0 && button_press > 0 && button_pressed_time + 1000 < board_millis() && button_pressed_state == false) {
+            if (button_pressed_time > 0 && button_press > 0 &&
+                now - button_pressed_time >= BUTTON_MULTI_PRESS_WINDOW_MS &&
+                button_pressed_state == false) {
                 if (button_pressed_cb != NULL) {
                     (*button_pressed_cb)(button_press);
                 }
-                button_pressed_time = button_press = 0;
+                button_pressed_time = 0;
+                button_press = 0;
             }
         }
 #endif
