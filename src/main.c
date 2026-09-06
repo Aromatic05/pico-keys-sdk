@@ -29,6 +29,7 @@
 #include "rom/gpio.h"
 #include "tinyusb.h"
 #include "esp_efuse.h"
+#include "esp_pm.h"
 #define BOOT_PIN GPIO_NUM_0
 #elif defined(PICO_PLATFORM)
 #include "pico/stdlib.h"
@@ -44,6 +45,22 @@
 #include "apdu.h"
 #include "usb.h"
 #include "mbedtls/sha256.h"
+
+#if defined(ESP_PLATFORM) && CONFIG_PM_ENABLE && !CONFIG_PICO_FIDO2_QEMU
+static int configure_power_management(void) {
+    const esp_pm_config_t pm_config = {
+        .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+        .min_freq_mhz = 80,
+        .light_sleep_enable = false,
+    };
+    esp_err_t err = esp_pm_configure(&pm_config);
+    if (err != ESP_OK) {
+        printf("power management configuration failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    return 0;
+}
+#endif
 
 extern void do_flash();
 extern void low_flash_init();
@@ -435,6 +452,12 @@ int main(void) {
 
 #else
     if (emul_init("127.0.0.1", 35963) != 0) {
+        return 1;
+    }
+#endif
+
+#if defined(ESP_PLATFORM) && CONFIG_PM_ENABLE && !CONFIG_PICO_FIDO2_QEMU
+    if (configure_power_management() != 0) {
         return 1;
     }
 #endif
