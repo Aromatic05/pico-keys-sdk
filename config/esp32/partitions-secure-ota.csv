@@ -1,0 +1,9 @@
+# Secure Boot v2 A/B OTA layout for 4 MiB ESP32-S3 flash.
+# Keeps the full 1 MiB PicoKeys data partition and two 1472 KiB app slots.
+# Name,   Type, SubType, Offset,   Size,      Flags
+nvs,      data, nvs,     0x11000,  0x6000,
+phy_init, data, phy,     0x17000,  0x1000,
+otadata,  data, ota,     0x18000,  0x2000,    encrypted
+ota_0,    app,  ota_0,   0x20000,  0x170000,
+ota_1,    app,  ota_1,   0x190000, 0x170000,
+part0,    0x40, 0x1,     0x300000, 1M,        encrypted
