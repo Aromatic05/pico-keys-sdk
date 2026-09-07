@@ -29,23 +29,187 @@
 
 led_driver_t *led_driver = NULL;
 
-static uint32_t led_mode = MODE_NOT_MOUNTED;
+#define LED_STATE_INTERACTION_SHIFT 8U
+#define LED_STATE_BASE_MASK         0xFFU
+#define LED_STATE_INTERACTION_MASK  0xFFU
 
-void led_set_mode(uint32_t mode) {
-    __atomic_store_n(&led_mode, mode, __ATOMIC_RELEASE);
+#define LED_TOUCH_WHITE_1_MS        120U
+#define LED_TOUCH_DARK_MS           80U
+#define LED_TOUCH_WHITE_2_MS        120U
+#define LED_TOUCH_FEEDBACK_MS       (LED_TOUCH_WHITE_1_MS + LED_TOUCH_DARK_MS + LED_TOUCH_WHITE_2_MS)
+
+#define LED_ON_NO_BLINK             ((1000U << LED_ON_SHIFT) | (0U << LED_OFF_SHIFT))
+
+enum {
+    RENDER_BOOTING = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_RED << LED_COLOR_SHIFT) | (500U << LED_ON_SHIFT) | (500U << LED_OFF_SHIFT),
+    RENDER_NORMAL_IDLE = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_BLUE << LED_COLOR_SHIFT) | LED_ON_NO_BLINK,
+    RENDER_USB_SUSPENDED = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_BLUE << LED_COLOR_SHIFT) | (1000U << LED_ON_SHIFT) | (2000U << LED_OFF_SHIFT),
+    RENDER_PROCESSING = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_CYAN << LED_COLOR_SHIFT) | (50U << LED_ON_SHIFT) | (50U << LED_OFF_SHIFT),
+    RENDER_MAINTENANCE = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_GREEN << LED_COLOR_SHIFT) | LED_ON_NO_BLINK,
+    RENDER_ERROR = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_RED << LED_COLOR_SHIFT) | (100U << LED_ON_SHIFT) | (100U << LED_OFF_SHIFT),
+    RENDER_WAITING_TOUCH = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_YELLOW << LED_COLOR_SHIFT) | (250U << LED_ON_SHIFT) | (250U << LED_OFF_SHIFT),
+};
+
+static uint32_t led_state_word = LED_BASE_BOOTING;
+static uint32_t led_touch_accepted_ms = 0;
+
+static uint32_t led_state_pack(led_base_state_t base, led_interaction_state_t interaction) {
+    return ((uint32_t)base & LED_STATE_BASE_MASK) |
+           (((uint32_t)interaction & LED_STATE_INTERACTION_MASK) << LED_STATE_INTERACTION_SHIFT);
 }
 
-uint32_t led_get_mode() {
-    return __atomic_load_n(&led_mode, __ATOMIC_ACQUIRE);
+static led_base_state_t led_state_base(uint32_t word) {
+    return (led_base_state_t)(word & LED_STATE_BASE_MASK);
 }
+
+static led_interaction_state_t led_state_interaction(uint32_t word) {
+    return (led_interaction_state_t)((word >> LED_STATE_INTERACTION_SHIFT) & LED_STATE_INTERACTION_MASK);
+}
+
+led_state_snapshot_t led_state_snapshot(void) {
+    uint32_t word = __atomic_load_n(&led_state_word, __ATOMIC_ACQUIRE);
+    led_state_snapshot_t snapshot = {
+        .base = led_state_base(word),
+        .interaction = led_state_interaction(word),
+        .interaction_started_ms = __atomic_load_n(&led_touch_accepted_ms, __ATOMIC_ACQUIRE),
+    };
+    return snapshot;
+}
+
+void led_state_transition(led_event_t event) {
+    uint32_t current;
+    uint32_t next;
+    do {
+        current = __atomic_load_n(&led_state_word, __ATOMIC_ACQUIRE);
+        led_base_state_t base = led_state_base(current);
+        led_interaction_state_t interaction = led_state_interaction(current);
+
+        switch (event) {
+            case LED_EVENT_USB_MOUNTED:
+            case LED_EVENT_USB_RESUMED:
+                if (base != LED_BASE_MAINTENANCE && base != LED_BASE_ERROR) {
+                    base = LED_BASE_NORMAL_IDLE;
+                }
+                break;
+            case LED_EVENT_USB_UNMOUNTED:
+                if (base != LED_BASE_MAINTENANCE && base != LED_BASE_ERROR) {
+                    base = LED_BASE_BOOTING;
+                    interaction = LED_INTERACTION_NONE;
+                }
+                break;
+            case LED_EVENT_USB_SUSPENDED:
+                if (base != LED_BASE_MAINTENANCE && base != LED_BASE_ERROR) {
+                    base = LED_BASE_USB_SUSPENDED;
+                    interaction = LED_INTERACTION_NONE;
+                }
+                break;
+            case LED_EVENT_PROCESSING_BEGIN:
+                if (base != LED_BASE_MAINTENANCE && base != LED_BASE_ERROR) {
+                    base = LED_BASE_PROCESSING;
+                }
+                break;
+            case LED_EVENT_PROCESSING_END:
+                if (base == LED_BASE_PROCESSING) {
+                    base = LED_BASE_NORMAL_IDLE;
+                }
+                break;
+            case LED_EVENT_MAINTENANCE_BEGIN:
+                if (base != LED_BASE_ERROR) {
+                    base = LED_BASE_MAINTENANCE;
+                    interaction = LED_INTERACTION_NONE;
+                }
+                break;
+            case LED_EVENT_TOUCH_WAIT_BEGIN:
+                if (base != LED_BASE_ERROR) {
+                    interaction = LED_INTERACTION_WAITING_TOUCH;
+                }
+                break;
+            case LED_EVENT_TOUCH_ACCEPTED:
+                if (interaction == LED_INTERACTION_WAITING_TOUCH) {
+                    __atomic_store_n(&led_touch_accepted_ms, board_millis(), __ATOMIC_RELEASE);
+                    interaction = LED_INTERACTION_TOUCH_ACCEPTED;
+                }
+                break;
+            case LED_EVENT_TOUCH_CANCELLED:
+                interaction = LED_INTERACTION_NONE;
+                break;
+            case LED_EVENT_ERROR:
+                base = LED_BASE_ERROR;
+                interaction = LED_INTERACTION_NONE;
+                break;
+            default:
+                return;
+        }
+
+        next = led_state_pack(base, interaction);
+        if (next == current) {
+            return;
+        }
+    } while (!__atomic_compare_exchange_n(&led_state_word, &current, next, false,
+                                           __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
+}
+
+#if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
+static void led_state_expire_touch(uint32_t now) {
+    uint32_t current = __atomic_load_n(&led_state_word, __ATOMIC_ACQUIRE);
+    if (led_state_interaction(current) != LED_INTERACTION_TOUCH_ACCEPTED) {
+        return;
+    }
+    uint32_t started = __atomic_load_n(&led_touch_accepted_ms, __ATOMIC_ACQUIRE);
+    if (now - started < LED_TOUCH_FEEDBACK_MS) {
+        return;
+    }
+    uint32_t next = led_state_pack(led_state_base(current), LED_INTERACTION_NONE);
+    __atomic_compare_exchange_n(&led_state_word, &current, next, false,
+                                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+
+static uint32_t led_render_base(led_base_state_t base) {
+    switch (base) {
+        case LED_BASE_NORMAL_IDLE:
+            return RENDER_NORMAL_IDLE;
+        case LED_BASE_USB_SUSPENDED:
+            return RENDER_USB_SUSPENDED;
+        case LED_BASE_PROCESSING:
+            return RENDER_PROCESSING;
+        case LED_BASE_MAINTENANCE:
+            return RENDER_MAINTENANCE;
+        case LED_BASE_ERROR:
+            return RENDER_ERROR;
+        case LED_BASE_BOOTING:
+        default:
+            return RENDER_BOOTING;
+    }
+}
+#endif
 
 void led_blinking_task() {
 #if defined(PICO_PLATFORM) || defined(ESP_PLATFORM)
     static uint32_t start_ms = 0;
     static uint32_t stop_ms = 0;
     static uint32_t last_led_update_ms = 0;
+    static uint32_t last_mode = UINT32_MAX;
     static uint8_t led_state = false;
-    uint32_t mode = led_get_mode();
+    uint32_t now = board_millis();
+    led_state_expire_touch(now);
+    led_state_snapshot_t snapshot = led_state_snapshot();
+
+    if (snapshot.interaction == LED_INTERACTION_TOUCH_ACCEPTED) {
+        uint32_t age = now - snapshot.interaction_started_ms;
+        bool white = age < LED_TOUCH_WHITE_1_MS ||
+                     (age >= LED_TOUCH_WHITE_1_MS + LED_TOUCH_DARK_MS && age < LED_TOUCH_FEEDBACK_MS);
+        if (now - last_led_update_ms > 2) {
+            led_driver->set_color(white ? LED_COLOR_WHITE : LED_COLOR_OFF,
+                                  white ? MAX_BTNESS : 0, white ? 1.f : 0.f);
+            last_led_update_ms = now;
+        }
+        last_mode = UINT32_MAX;
+        return;
+    }
+
+    uint32_t mode = snapshot.interaction == LED_INTERACTION_WAITING_TOUCH
+        ? RENDER_WAITING_TOUCH
+        : led_render_base(snapshot.base);
     uint8_t state = led_state;
 #ifdef PICO_DEFAULT_LED_PIN_INVERTED
     state = !state;
@@ -54,14 +218,23 @@ void led_blinking_task() {
     uint32_t led_color = (mode & LED_COLOR_MASK) >> LED_COLOR_SHIFT;
     uint32_t led_off = (mode & LED_OFF_MASK) >> LED_OFF_SHIFT;
     uint32_t led_on = (mode & LED_ON_MASK) >> LED_ON_SHIFT;
+    bool steady = led_off == 0;
 
-    float progress = 0;
-
-    if (stop_ms > start_ms) {
-        progress = (float)(board_millis() - start_ms) / (stop_ms - start_ms);
+    if (mode != last_mode) {
+        start_ms = now;
+        led_state = true;
+        state = true;
+        stop_ms = now + led_on;
+        last_mode = mode;
     }
 
-    if (!state) {
+    float progress = steady ? 1.f : 0.f;
+
+    if (!steady && stop_ms > start_ms) {
+        progress = (float)(now - start_ms) / (stop_ms - start_ms);
+    }
+
+    if (!steady && !state) {
         progress = 1. - progress;
     }
     if (__atomic_load_n(&phy_data.opts, __ATOMIC_ACQUIRE) & PHY_OPT_LED_STEADY) {
@@ -69,12 +242,12 @@ void led_blinking_task() {
     }
 
     // limit the frequency of LED status updates
-    if (board_millis() - last_led_update_ms > 2) {
+    if (now - last_led_update_ms > 2) {
         led_driver->set_color(led_color, led_brightness, progress);
-        last_led_update_ms = board_millis();
+        last_led_update_ms = now;
     }
 
-    if (board_millis() >= stop_ms){
+    if (!steady && now >= stop_ms){
         start_ms = stop_ms;
         led_state ^= 1; // toggle
         stop_ms = start_ms + (led_state ? led_on : led_off);
@@ -176,6 +349,6 @@ void led_init() {
     phy_data.led_driver_present = true;
     phy_data.led_gpio_present = true;
     led_driver->init();
-    led_set_mode(MODE_NOT_MOUNTED);
+    led_state_transition(LED_EVENT_USB_UNMOUNTED);
 #endif
 }

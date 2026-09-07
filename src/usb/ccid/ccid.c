@@ -284,8 +284,6 @@ int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read) {
 #ifndef ENABLE_EMULATION
                 card_release(usb_itf);
 #endif
-
-                led_set_mode(MODE_MOUNTED);
             }
             else if (request->bMessageType == CCID_POWER_OFF) {
                 /* Do not carry PIN/management authentication across ICC power-off. */
@@ -311,8 +309,6 @@ int driver_process_usb_packet_ccid(uint8_t itf, uint16_t rx_read) {
 #ifndef ENABLE_EMULATION
                 card_release(usb_itf);
 #endif
-
-                led_set_mode(MODE_SUSPENDED);
             }
             else if (request->bMessageType == CCID_SET_PARAMS ||
                      request->bMessageType == CCID_GET_PARAMS ||

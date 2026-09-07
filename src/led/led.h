@@ -18,6 +18,7 @@
 #ifndef _LED_H_
 #define _LED_H_
 
+#include <stdbool.h>
 #include <stdint.h>
 
 enum {
@@ -47,22 +48,43 @@ enum {
 #define MAX_BTNESS          ((1 << LED_BTNESS_BITS) - 1)
 #define HALF_BTNESS         ((1 << (LED_BTNESS_BITS - 1)) - 1)
 
-// steady on
-#define LED_ON_NO_BLINK     ((1000 << LED_ON_SHIFT) | (0 << LED_OFF_SHIFT))
+typedef enum {
+    LED_BASE_BOOTING = 0,
+    LED_BASE_NORMAL_IDLE,
+    LED_BASE_USB_SUSPENDED,
+    LED_BASE_PROCESSING,
+    LED_BASE_MAINTENANCE,
+    LED_BASE_ERROR,
+} led_base_state_t;
 
-enum  {
-    MODE_NOT_MOUNTED = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_RED << LED_COLOR_SHIFT) | (500 << LED_ON_SHIFT) | (500 << LED_OFF_SHIFT),
-    MODE_MOUNTED     = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_GREEN << LED_COLOR_SHIFT) | (500 << LED_ON_SHIFT) | (500 << LED_OFF_SHIFT),
-    MODE_SUSPENDED   = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_BLUE << LED_COLOR_SHIFT) | (1000 << LED_ON_SHIFT) | (2000 << LED_OFF_SHIFT),
-    MODE_PROCESSING  = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_GREEN << LED_COLOR_SHIFT) | (50 << LED_ON_SHIFT) | (50 << LED_OFF_SHIFT),
-    MODE_BUTTON      = (MAX_BTNESS << LED_BTNESS_SHIFT) | (LED_COLOR_YELLOW << LED_COLOR_SHIFT) | (1000 << LED_ON_SHIFT) | (100 << LED_OFF_SHIFT),
+typedef enum {
+    LED_INTERACTION_NONE = 0,
+    LED_INTERACTION_WAITING_TOUCH,
+    LED_INTERACTION_TOUCH_ACCEPTED,
+} led_interaction_state_t;
 
-    MODE_ALWAYS_ON   = UINT32_MAX,
-    MODE_ALWAYS_OFF  = 0
-};
+typedef enum {
+    LED_EVENT_USB_MOUNTED = 0,
+    LED_EVENT_USB_UNMOUNTED,
+    LED_EVENT_USB_SUSPENDED,
+    LED_EVENT_USB_RESUMED,
+    LED_EVENT_PROCESSING_BEGIN,
+    LED_EVENT_PROCESSING_END,
+    LED_EVENT_MAINTENANCE_BEGIN,
+    LED_EVENT_TOUCH_WAIT_BEGIN,
+    LED_EVENT_TOUCH_ACCEPTED,
+    LED_EVENT_TOUCH_CANCELLED,
+    LED_EVENT_ERROR,
+} led_event_t;
 
-extern void led_set_mode(uint32_t mode);
-extern uint32_t led_get_mode();
+typedef struct {
+    led_base_state_t base;
+    led_interaction_state_t interaction;
+    uint32_t interaction_started_ms;
+} led_state_snapshot_t;
+
+extern void led_state_transition(led_event_t event);
+extern led_state_snapshot_t led_state_snapshot(void);
 extern void led_blinking_task();
 extern void led_off_all();
 extern void led_init();
