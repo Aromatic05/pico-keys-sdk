@@ -139,7 +139,6 @@ void apdu_reset_session(apdu_session_id_t session) {
 }
 
 int process_apdu() {
-    led_set_mode(MODE_PROCESSING);
     int result = SW_FILE_NOT_FOUND();
     bool select_by_aid = INS(apdu) == 0xA4 && P1(apdu) == 0x04 &&
         (P2(apdu) == 0x00 || P2(apdu) == 0x04);
