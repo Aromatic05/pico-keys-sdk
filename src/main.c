@@ -268,23 +268,20 @@ uint32_t button_raw_changed_time = 0;
 uint32_t button_pressed_time = 0;
 uint8_t button_press = 0;
 bool wait_button() {
-    /* Disabled by default. As LED may not be properly configured,
-       it will not be possible to indicate button press unless it
-       is commissioned. */
     uint32_t button_timeout = 0;
     if (phy_data.up_btn_present) {
         button_timeout = phy_data.up_btn * 1000;
     }
     if (button_timeout == 0) {
-        return false;
+        return true;
     }
     uint32_t start_button = board_millis();
     bool timeout = false;
     button_cancel_clear();
-    uint32_t led_mode = led_get_mode();
-    led_set_mode(MODE_BUTTON);
+    led_state_transition(LED_EVENT_TOUCH_WAIT_BEGIN);
     __atomic_store_n(&req_button_pending, true, __ATOMIC_RELEASE);
     while (picok_board_button_read() == false && !button_cancel_is_requested()) {
+        led_blinking_task();
 #if defined(ESP_PLATFORM)
         vTaskDelay(1);
 #elif defined(PICO_PLATFORM)
@@ -297,6 +294,7 @@ bool wait_button() {
     }
     if (!timeout) {
         while (picok_board_button_read() == true && !button_cancel_is_requested()) {
+            led_blinking_task();
 #if defined(ESP_PLATFORM)
             vTaskDelay(1);
 #elif defined(PICO_PLATFORM)
@@ -308,9 +306,15 @@ bool wait_button() {
             }
         }
     }
-    led_set_mode(led_mode);
     __atomic_store_n(&req_button_pending, false, __ATOMIC_RELEASE);
-    return timeout || button_cancel_is_requested();
+    bool cancelled = button_cancel_is_requested();
+    if (!timeout && !cancelled) {
+        led_state_transition(LED_EVENT_TOUCH_ACCEPTED);
+    }
+    else {
+        led_state_transition(LED_EVENT_TOUCH_CANCELLED);
+    }
+    return timeout || cancelled;
 }
 
 __attribute__((weak)) int picokey_init() {

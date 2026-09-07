@@ -33,20 +33,20 @@
 
 #ifndef ENABLE_EMULATION
 void tud_mount_cb(void) {
-    led_set_mode(MODE_MOUNTED);
+    led_state_transition(LED_EVENT_USB_MOUNTED);
 }
 
 void tud_umount_cb(void) {
-    led_set_mode(MODE_NOT_MOUNTED);
+    led_state_transition(LED_EVENT_USB_UNMOUNTED);
 }
 
 void tud_suspend_cb(bool remote_wakeup_en) {
     (void)remote_wakeup_en;
-    led_set_mode(MODE_SUSPENDED);
+    led_state_transition(LED_EVENT_USB_SUSPENDED);
 }
 
 void tud_resume_cb(void) {
-    led_set_mode(MODE_MOUNTED);
+    led_state_transition(LED_EVENT_USB_RESUMED);
 }
 #endif
 
@@ -130,6 +130,9 @@ bool card_try_claim(uint8_t itf) {
 #ifndef ENABLE_EMULATION
     mutex_exit(&card_state_mutex);
 #endif
+    if (claimed) {
+        led_state_transition(LED_EVENT_PROCESSING_BEGIN);
+    }
     return claimed;
 }
 
@@ -142,16 +145,21 @@ void card_release_maintenance(void) {
 }
 
 void card_release(uint8_t itf) {
+    bool released = false;
 #ifndef ENABLE_EMULATION
     mutex_enter_blocking(&card_state_mutex);
 #endif
     if (card_command_active && card_command_itf == itf) {
         card_command_active = false;
         card_command_itf = ITF_INVALID;
+        released = true;
     }
 #ifndef ENABLE_EMULATION
     mutex_exit(&card_state_mutex);
 #endif
+    if (released) {
+        led_state_transition(LED_EVENT_PROCESSING_END);
+    }
 }
 
 bool card_command_is_owned_by(uint8_t itf) {
@@ -335,7 +343,6 @@ static bool card_start(uint8_t itf, void *(*func)(void *)) {
             multicore_launch_func_core1(func);
 #endif
         }
-        led_set_mode(MODE_MOUNTED);
         card_locked_itf = itf;
         card_locked_func = func;
     }
@@ -377,7 +384,6 @@ static void card_exit_unchecked(void) {
             mutex_exit(&mutex);
 #endif
         }
-        led_set_mode(MODE_SUSPENDED);
 #ifdef ESP_PLATFORM
         hcore1 = NULL;
 #endif
@@ -423,7 +429,6 @@ int card_status(uint8_t itf) {
                     }
                 }
                 timeout_stop();
-                led_set_mode(MODE_MOUNTED);
                 return PICOKEY_OK;
             }
 #ifndef ENABLE_EMULATION
