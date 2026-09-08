@@ -81,6 +81,7 @@ extern void card_start(uint8_t, void *(*func)(void *));
 extern void card_exit();
 extern int card_status(uint8_t itf);
 extern void usb_init();
+extern uint8_t picokey_usb_interface_policy(uint8_t configured);
 
 extern uint16_t finished_data_size;
 extern void usb_set_timeout_counter(uint8_t itf, uint32_t v);

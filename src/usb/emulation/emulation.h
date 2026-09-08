@@ -60,6 +60,8 @@ static inline uint32_t tud_vendor_n_flush(uint8_t itf) {
 #ifdef USB_ITF_HID
 extern void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len);
 extern bool tud_hid_n_report(uint8_t itf, uint8_t report_id, const uint8_t *buffer, uint32_t n);
+extern uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen);
+extern void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, const uint8_t *buffer, uint16_t bufsize);
 #endif
 
 #endif // _EMULATION_H_
