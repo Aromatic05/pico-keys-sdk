@@ -86,10 +86,20 @@ static int load_internal_keydev(mbedtls_ecp_keypair *ecp, mbedtls_ecp_group_id e
     uint8_t kbase[32] = {0};
     derive_kbase(kbase);
     if (file_has_data(ef_devcert_key)) {
+        if (file_get_size(ef_devcert_key) != 32) {
+            mbedtls_platform_zeroize(kbase, sizeof(kbase));
+            return SW_EXEC_ERROR();
+        }
         uint8_t pkey[32] = {0};
         memcpy(pkey, file_get_data(ef_devcert_key), 32);
-        aes_decrypt(kbase, pico_serial_hash, 32 * 8, PICO_KEYS_AES_MODE_CBC, pkey, 32);
-        int ret = mbedtls_ecp_read_key(ec_id, ecp, pkey, 32);
+        int ret = aes_decrypt(kbase, pico_serial_hash, 32 * 8,
+                              PICO_KEYS_AES_MODE_CBC, pkey, 32);
+        mbedtls_platform_zeroize(kbase, sizeof(kbase));
+        if (ret != PICOKEY_OK) {
+            mbedtls_platform_zeroize(pkey, sizeof(pkey));
+            return SW_EXEC_ERROR();
+        }
+        ret = mbedtls_ecp_read_key(ec_id, ecp, pkey, 32);
         mbedtls_platform_zeroize(pkey, sizeof(pkey));
         if (ret != 0) {
             return SW_EXEC_ERROR();
@@ -99,12 +109,26 @@ static int load_internal_keydev(mbedtls_ecp_keypair *ecp, mbedtls_ecp_group_id e
         // Generate new key
         uint8_t pkey[MBEDTLS_ECP_MAX_BYTES] = {0};
         size_t olen = 0;
-        mbedtls_ecp_gen_key(ec_id, ecp, random_gen, NULL);
-        mbedtls_ecp_write_key_ext(ecp, &olen, pkey, sizeof(pkey));
+        int ret = mbedtls_ecp_gen_key(ec_id, ecp, random_gen, NULL);
+        if (ret == 0) {
+            ret = mbedtls_ecp_write_key_ext(ecp, &olen, pkey, sizeof(pkey));
+        }
+        if (ret != 0 || olen != 32) {
+            mbedtls_platform_zeroize(pkey, sizeof(pkey));
+            mbedtls_platform_zeroize(kbase, sizeof(kbase));
+            return SW_EXEC_ERROR();
+        }
 
-        aes_encrypt(kbase, pico_serial_hash, 32 * 8, PICO_KEYS_AES_MODE_CBC, pkey, 32);
-        file_put_data(ef_devcert_key, pkey, (uint16_t)olen);
+        ret = aes_encrypt(kbase, pico_serial_hash, 32 * 8,
+                          PICO_KEYS_AES_MODE_CBC, pkey, 32);
+        if (ret == PICOKEY_OK) {
+            ret = file_put_data(ef_devcert_key, pkey, (uint16_t)olen);
+        }
         mbedtls_platform_zeroize(pkey, sizeof(pkey));
+        mbedtls_platform_zeroize(kbase, sizeof(kbase));
+        if (ret != PICOKEY_OK) {
+            return SW_EXEC_ERROR();
+        }
         low_flash_available();
     }
     return PICOKEY_OK;
@@ -197,7 +221,10 @@ int cmd_keydev_sign() {
         if (!ef_devcert) {
             return SW_FILE_NOT_FOUND();
         }
-        file_put_data(ef_devcert, apdu.data, (uint16_t)apdu.nc);
+        if (apdu.nc > UINT16_MAX ||
+            file_put_data(ef_devcert, apdu.data, (uint16_t)apdu.nc) != PICOKEY_OK) {
+            return SW_EXEC_ERROR();
+        }
         res_APDU_size = 0;
         low_flash_available();
     }

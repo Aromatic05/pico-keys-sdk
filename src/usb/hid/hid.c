@@ -32,7 +32,7 @@ static portMUX_TYPE mutex = portMUX_INITIALIZER_UNLOCKED;
 #include "usb.h"
 #include <assert.h>
 
-extern void init_fido();
+extern int init_fido();
 bool is_nk = false;
 uint8_t (*get_version_major)() = NULL;
 uint8_t (*get_version_minor)() = NULL;
@@ -453,7 +453,7 @@ int driver_process_usb_packet_hid(uint16_t read) {
                 return ctap_error(CTAP1_ERR_CHANNEL_BUSY);
             }
             hid_tx[ITF_HID_CTAP].r_ptr = hid_tx[ITF_HID_CTAP].w_ptr = 0;
-            init_fido();
+            (void)init_fido();
             CTAPHID_INIT_REQ *req = (CTAPHID_INIT_REQ *) ctap_req->init.data;
             CTAPHID_INIT_RESP *resp = (CTAPHID_INIT_RESP *) ctap_resp->init.data;
             memcpy(resp->nonce, req->nonce, sizeof(resp->nonce));
