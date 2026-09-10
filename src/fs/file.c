@@ -19,6 +19,9 @@
 #include "pico_keys.h"
 #include <string.h>
 #include <stdio.h>
+#ifdef ENABLE_EMULATION
+#include <stdlib.h>
+#endif
 #include "asn1.h"
 #include "apdu.h"
 
@@ -325,6 +328,38 @@ uint16_t file_get_size(const file_t *tf) {
 }
 
 int file_put_data(file_t *file, const uint8_t *data, uint16_t len) {
+#ifdef ENABLE_EMULATION
+    /* Test-only deterministic storage failure injection.  This is compiled
+     * out of hardware firmware and lets protocol tests prove that a mutating
+     * command never reports success after its persistent write failed. */
+    static bool injected_failure_consumed = false;
+    static unsigned long injected_match_count = 0;
+    const char *fail_fid = getenv("PICO_KEYS_EMU_FAIL_FILE_PUT_FID_ONCE");
+    if (!injected_failure_consumed && fail_fid != NULL && file != NULL) {
+        char *end = NULL;
+        unsigned long target = strtoul(fail_fid, &end, 0);
+        if (end != fail_fid && *end == '\0' && target <= UINT16_MAX &&
+            file->fid == (uint16_t)target) {
+            injected_match_count++;
+            unsigned long fail_nth = 1;
+            const char *nth = getenv("PICO_KEYS_EMU_FAIL_FILE_PUT_NTH");
+            if (nth != NULL) {
+                char *nth_end = NULL;
+                unsigned long parsed = strtoul(nth, &nth_end, 0);
+                if (nth_end != nth && *nth_end == '\0' && parsed > 0) {
+                    fail_nth = parsed;
+                }
+            }
+            if (injected_match_count == fail_nth) {
+                injected_failure_consumed = true;
+                fprintf(stderr,
+                        "PICO_KEYS_EMU_FILE_PUT_FAULT fid=0x%04x match=%lu len=%u\n",
+                        file->fid, injected_match_count, len);
+                return PICOKEY_ERR_MEMORY_FATAL;
+            }
+        }
+    }
+#endif
     return flash_write_data_to_file(file, data, len);
 }
 

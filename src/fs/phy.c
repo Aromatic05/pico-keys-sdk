@@ -177,7 +177,13 @@ int phy_save() {
     if (ret != PICOKEY_OK) {
         return ret;
     }
-    file_put_data(ef_phy, tmp, tmp_len);
+    if (ef_phy == NULL) {
+        return PICOKEY_ERR_FILE_NOT_FOUND;
+    }
+    ret = file_put_data(ef_phy, tmp, tmp_len);
+    if (ret != PICOKEY_OK) {
+        return ret;
+    }
     low_flash_available();
     return PICOKEY_OK;
 }

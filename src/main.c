@@ -65,6 +65,9 @@ static int configure_power_management(void) {
 extern void do_flash();
 extern void low_flash_init();
 extern int init_otp_files();
+#ifdef ENABLE_EMULATION
+extern int low_flash_cache_selftest(void);
+#endif
 
 app_t apps[16];
 uint8_t num_apps = 0;
@@ -455,6 +458,10 @@ int main(void) {
 #endif
 
 #else
+    if (getenv("PICO_KEYS_EMU_LOW_FLASH_CACHE_SELFTEST") != NULL) {
+        low_flash_init();
+        return low_flash_cache_selftest() == PICOKEY_OK ? 0 : 1;
+    }
     if (emul_init("127.0.0.1", 35963) != 0) {
         return 1;
     }
