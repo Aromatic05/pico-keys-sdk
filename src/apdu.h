@@ -37,6 +37,7 @@ typedef struct app {
 extern bool app_exists(const uint8_t *aid, size_t aid_len);
 extern int register_app(int (*)(app_t *, uint8_t), const uint8_t *);
 extern int select_app(const uint8_t *aid, size_t aid_len);
+extern bool picokey_app_policy(const uint8_t *aid, size_t aid_len);
 
 typedef struct cmd {
     uint8_t ins;
@@ -68,9 +69,21 @@ PACK(struct apdu {
 
 extern struct apdu apdu;
 
+typedef enum apdu_session_id {
+    APDU_SESSION_CCID = 0,
+    APDU_SESSION_WCID,
+    APDU_SESSION_HID,
+    APDU_SESSION_COUNT,
+} apdu_session_id_t;
+
 extern uint16_t set_res_sw(uint8_t sw1, uint8_t sw2);
 extern int process_apdu();
-extern uint16_t apdu_process(uint8_t, const uint8_t *buffer, uint16_t buffer_size);
+extern uint16_t apdu_process(apdu_session_id_t session, uint8_t itf, const uint8_t *buffer, uint16_t buffer_size);
+extern apdu_session_id_t apdu_current_session(void);
+extern int apdu_select_app(apdu_session_id_t session, const uint8_t *aid, size_t aid_len);
+extern int apdu_ensure_app(apdu_session_id_t session, const uint8_t *aid, size_t aid_len);
+extern void apdu_reset_warm_session(apdu_session_id_t session);
+extern void apdu_reset_session(apdu_session_id_t session);
 extern void apdu_finish();
 extern uint16_t apdu_next();
 extern void *apdu_thread(void *);

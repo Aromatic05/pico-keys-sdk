@@ -22,11 +22,16 @@
 #include "pico/stdlib.h"
 #endif
 #include <string.h>
+#ifdef ESP_PLATFORM
+#include "esp_random.h"
+#endif
 
 #include "hwrng.h"
 
 #define RANDOM_BYTES_LENGTH 32
+#define MAX_RANDOM_BUFFER 1024
 static uint32_t random_word[RANDOM_BYTES_LENGTH / sizeof(uint32_t)];
+static uint8_t random_return_buffer[MAX_RANDOM_BUFFER];
 
 void random_init(void) {
     hwrng_init(random_word, RANDOM_BYTES_LENGTH / sizeof(uint32_t));
@@ -40,59 +45,69 @@ void random_init(void) {
  * Free pointer to random 32-byte
  */
 void random_bytes_free(const uint8_t *p) {
-    (void) p;
-    memset(random_word, 0, RANDOM_BYTES_LENGTH);
-    hwrng_flush();
+    if (p == random_return_buffer) {
+        /* Do not leave old random material in the static return buffer. */
+        volatile uint8_t *out = random_return_buffer;
+        for (size_t i = 0; i < sizeof(random_return_buffer); ++i) {
+            out[i] = 0;
+        }
+    } else if (p == (const uint8_t *)random_word) {
+        memset(random_word, 0, RANDOM_BYTES_LENGTH);
+        hwrng_flush();
+    }
 }
 
 /*
  * Return pointer to random 32-byte
  */
-#define MAX_RANDOM_BUFFER 1024
 const uint8_t *random_bytes_get(size_t len) {
     if (len > MAX_RANDOM_BUFFER) {
         return NULL;
     }
-    static uint32_t return_word[MAX_RANDOM_BUFFER / sizeof(uint32_t)];
+#ifdef ESP_PLATFORM
+    /* ESP-S3 provides hardware-conditioned random bytes directly. The old
+     * 32-byte HWRNG ring was replenished only every 10ms core0 tick and made
+     * RSA key generation take minutes despite working hardware entropy. */
+    esp_fill_random(random_return_buffer, len);
+#else
     for (size_t ix = 0; ix < len; ix += RANDOM_BYTES_LENGTH) {
         hwrng_wait_full();
-        memcpy(return_word + ix / sizeof(uint32_t), random_word, RANDOM_BYTES_LENGTH);
+        size_t count = len - ix < RANDOM_BYTES_LENGTH ? len - ix : RANDOM_BYTES_LENGTH;
+        memcpy(random_return_buffer + ix, random_word, count);
         random_bytes_free((const uint8_t *) random_word);
     }
-    return (const uint8_t *) return_word;
+#endif
+    return random_return_buffer;
 }
 
 /*
  * Random byte iterator
  */
 int random_gen(void *arg, unsigned char *out, size_t out_len) {
-    uint8_t *index_p = (uint8_t *) arg;
-    uint8_t index = index_p ? *index_p : 0;
-    uint8_t n;
-
-    while (out_len) {
-        hwrng_wait_full();
-
-        n = RANDOM_BYTES_LENGTH - index;
-        if (n > out_len) {
-            n = (uint8_t)out_len;
-        }
-
-        memcpy(out, ((unsigned char *) random_word) + index, n);
-        out += n;
-        out_len -= n;
-        index += n;
-
-        if (index >= RANDOM_BYTES_LENGTH) {
-            index = 0;
-            hwrng_flush();
-        }
+    if (out == NULL && out_len != 0) {
+        return -1;
     }
-
-    if (index_p) {
-        *index_p = index;
+#ifdef ESP_PLATFORM
+    (void)arg;
+    if (out_len != 0) {
+        esp_fill_random(out, out_len);
     }
-
+#else
+    /* A fresh word is consumed for every call, including arg == NULL.
+     * The previous per-caller index reused the same bytes when multiple
+     * consumers requested less than 32 bytes with independent contexts. */
+    size_t remaining = out_len;
+    while (remaining > 0) {
+        uint32_t word = hwrng_get();
+        size_t count = remaining < sizeof(word) ? remaining : sizeof(word);
+        memcpy(out, &word, count);
+        out += count;
+        remaining -= count;
+    }
+    if (arg != NULL) {
+        *(uint8_t *)arg = (uint8_t)((*(uint8_t *)arg + out_len) % RANDOM_BYTES_LENGTH);
+    }
+#endif
     return 0;
 }
 

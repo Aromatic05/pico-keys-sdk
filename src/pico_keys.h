@@ -160,11 +160,16 @@ static inline uint32_t put_uint64_t_le(uint64_t n, uint8_t *b) {
 }
 
 extern void low_flash_available();
+extern bool low_flash_is_pending();
+extern void do_flash();
 extern int flash_clear_file(file_t *file);
 
 extern int (*button_pressed_cb)(uint8_t);
 
 extern bool is_req_button_pending();
+extern void button_cancel_request(void);
+extern void button_cancel_clear(void);
+extern bool button_cancel_is_requested(void);
 
 #define SW_BYTES_REMAINING_00()             set_res_sw(0x61, 0x00)
 #define SW_WARNING_STATE_UNCHANGED()        set_res_sw(0x62, 0x00)
@@ -254,5 +259,8 @@ extern uint8_t pico_serial_hash[32];
 extern bool has_set_rtc();
 extern time_t get_rtc_time();
 extern void set_rtc_time(time_t tv_sec);
+
+extern void picokey_extra_transport_init();
+extern void picokey_extra_transport_task();
 
 #endif

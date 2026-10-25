@@ -28,6 +28,8 @@
 #include "compat.h"
 #include "phy.h"
 
+#define PICO_KEYS_FLASH_SECTOR_SIZE 4096
+
 #define FILE_TYPE_NOT_KNOWN     0x00
 #define FILE_TYPE_DF            0x04
 #define FILE_TYPE_INTERNAL_EF   0x02
