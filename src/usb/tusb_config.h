@@ -106,7 +106,10 @@ extern "C" {
 #endif
 
 #define CFG_TUD_VENDOR_RX_BUFSIZE (TUD_OPT_HIGH_SPEED ? 512 : 64)
-#define CFG_TUD_VENDOR_TX_BUFSIZE 2048
+/* A full CCID APDU response may exceed 2048 bytes (10-byte CCID header,
+ * 2048-byte certificate workspace and SW). Keep an entire response in the
+ * TinyUSB FIFO to avoid a premature bulk short packet or mid-frame ZLP. */
+#define CFG_TUD_VENDOR_TX_BUFSIZE 4096
 
 //------------- CLASS -------------//
 #define CFG_TUD_CDC               0
