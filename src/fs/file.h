@@ -71,7 +71,9 @@
 
 #define MAX_DEPTH 4
 
-#define MAX_DYNAMIC_FILES 256
+/* Shared table: 256 FIDO residents + 256 RP indexes + 255 OATH credentials
+ * + 24 HSM Auth credentials, plus per-applet configuration records. */
+#define MAX_DYNAMIC_FILES 1024
 
 #ifdef _MSC_VER
 __pragma( pack(push, 1) )
