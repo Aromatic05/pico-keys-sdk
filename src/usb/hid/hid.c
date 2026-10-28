@@ -91,7 +91,7 @@ int driver_init_hid() {
 }
 
 static bool hid_tx_idle(void) {
-    return last_write_result[ITF_HID_CTAP] != WRITE_PENDING &&
+    return __atomic_load_n(&last_write_result[ITF_HID_CTAP], __ATOMIC_ACQUIRE) != WRITE_PENDING &&
            hid_tx[ITF_HID_CTAP].w_ptr == hid_tx[ITF_HID_CTAP].r_ptr &&
            send_buffer_size[ITF_HID_CTAP] == 0;
 }
@@ -231,8 +231,8 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
         taskENTER_CRITICAL(&mutex);
 #endif
         CTAPHID_FRAME *req = (CTAPHID_FRAME *) report;
-        if (last_write_result[instance] == WRITE_PENDING) {
-            last_write_result[instance] = WRITE_SUCCESS;
+        bool completing = __atomic_load_n(&last_write_result[instance], __ATOMIC_ACQUIRE) == WRITE_PENDING;
+        if (completing) {
             if (FRAME_TYPE(req) == TYPE_INIT) {
                 if (req->init.cmd != CTAPHID_KEEPALIVE) {
                     send_buffer_size[instance] -= MIN(64 - 7, send_buffer_size[instance]);
@@ -242,7 +242,7 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
                 send_buffer_size[instance] -= MIN(64 - 5, send_buffer_size[instance]);
             }
         }
-        if (last_write_result[instance] == WRITE_SUCCESS) {
+        if (completing) {
             if (FRAME_TYPE(req) != TYPE_INIT || req->init.cmd != CTAPHID_KEEPALIVE) {
                 if (send_buffer_size[instance] > 0) {
                     ctap_resp = (CTAPHID_FRAME *) ((uint8_t *) ctap_resp + 64 - 5);
@@ -260,6 +260,12 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
         if (hid_tx[ITF_HID_CTAP].r_ptr >= hid_tx[ITF_HID_CTAP].w_ptr) {
             hid_tx[ITF_HID_CTAP].r_ptr = hid_tx[ITF_HID_CTAP].w_ptr = 0;
         }
+        /* TinyUSB runs on CPU1 while hid_task sends on CPU0. The sender may
+         * observe WRITE_SUCCESS immediately, so publish it only after the
+         * next frame's sequence and r_ptr are fully prepared. */
+        if (completing) {
+            __atomic_store_n(&last_write_result[instance], WRITE_SUCCESS, __ATOMIC_RELEASE);
+        }
 #ifdef ESP_PLATFORM
         taskEXIT_CRITICAL(&mutex);
 #endif
@@ -267,12 +273,16 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
 }
 
 int driver_write_hid(uint8_t itf, const uint8_t *buffer, uint16_t buffer_size) {
-    if (last_write_result[itf] == WRITE_PENDING) {
+    if (__atomic_load_n(&last_write_result[itf], __ATOMIC_ACQUIRE) == WRITE_PENDING) {
         return 0;
     }
+    /* TinyUSB completes IN reports on a separate task. Publish the pending
+     * state before submitting the report, otherwise an early completion
+     * callback sees no pending transfer and its ACK is lost permanently. */
+    __atomic_store_n(&last_write_result[itf], WRITE_PENDING, __ATOMIC_RELEASE);
     bool r = tud_hid_n_report(itf, 0, buffer, buffer_size);
-    last_write_result[itf] = r ? WRITE_PENDING : WRITE_FAILED;
-    if (last_write_result[itf] == WRITE_FAILED) {
+    if (!r) {
+        __atomic_store_n(&last_write_result[itf], WRITE_FAILED, __ATOMIC_RELEASE);
         return 0;
     }
 #ifdef ENABLE_EMULATION
@@ -334,6 +344,20 @@ static void hid_abort_transaction(void) {
     last_seq = 0;
 }
 
+/* A broadcast INIT creates a new logical HID channel. Reusing one fixed
+ * channel across host connections lets stale replies masquerade as current
+ * ones. INIT on an existing CID instead resynchronizes that same channel. */
+static uint32_t hid_init_response_cid(uint32_t request_cid) {
+    if (request_cid != CID_BROADCAST) {
+        return request_cid;
+    }
+    static uint32_t next_cid = 0;
+    do {
+        ++next_cid;
+    } while (next_cid == 0 || next_cid == CID_BROADCAST);
+    return next_cid;
+}
+
 int driver_process_usb_nopacket_hid() {
     if (last_packet_time > 0 && last_packet_time + 500 < board_millis()) {
         ctap_error(CTAP1_ERR_MSG_TIMEOUT);
@@ -355,19 +379,14 @@ int driver_process_usb_packet_hid(uint16_t read) {
         CTAPHID_FRAME *rx_req = (CTAPHID_FRAME *)
             (hid_rx[ITF_HID_CTAP].buffer + hid_rx[ITF_HID_CTAP].r_ptr);
 
-        if (!card_is_idle()) {
-            if (!card_command_is_owned_by(ITF_HID)) {
-                if (!hid_tx_idle()) {
-                    return 0;
-                }
-                hid_prepare_response();
-                int ret = ctap_error_for_cid(rx_req->cid, CTAP1_ERR_CHANNEL_BUSY);
-                hid_rx[ITF_HID_CTAP].r_ptr += 64;
-                if (hid_rx[ITF_HID_CTAP].r_ptr >= hid_rx[ITF_HID_CTAP].w_ptr) {
-                    hid_rx[ITF_HID_CTAP].r_ptr = hid_rx[ITF_HID_CTAP].w_ptr = 0;
-                }
-                return ret;
-            }
+        /*
+         * An APDU owned by CCID must not reject each incoming HID report
+         * separately. Assemble every fragment first, then let the complete
+         * HID command claim the core (or return one CHANNEL_BUSY). Otherwise
+         * surplus BUSY replies outlive their requests and desynchronize CIDs.
+         * An already running HID command still owns its in-flight message.
+         */
+        if (!card_is_idle() && card_command_is_owned_by(ITF_HID)) {
             if (FRAME_TYPE(rx_req) == TYPE_INIT && rx_req->init.cmd == CTAPHID_CANCEL) {
                 hid_rx[ITF_HID_CTAP].r_ptr += 64;
                 if (hid_rx[ITF_HID_CTAP].r_ptr >= hid_rx[ITF_HID_CTAP].w_ptr) {
@@ -457,7 +476,7 @@ int driver_process_usb_packet_hid(uint16_t read) {
             CTAPHID_INIT_REQ *req = (CTAPHID_INIT_REQ *) ctap_req->init.data;
             CTAPHID_INIT_RESP *resp = (CTAPHID_INIT_RESP *) ctap_resp->init.data;
             memcpy(resp->nonce, req->nonce, sizeof(resp->nonce));
-            resp->cid = 0x01000000;
+            resp->cid = hid_init_response_cid(ctap_req->cid);
             resp->versionInterface = CTAPHID_IF_VERSION;
             resp->versionMajor = get_version_major ? get_version_major() : PICO_KEYS_SDK_VERSION_MAJOR;
             resp->versionMinor = get_version_minor ? get_version_minor() : PICO_KEYS_SDK_VERSION_MINOR;
@@ -686,7 +705,8 @@ void hid_task() {
     else if (status == PICOKEY_ERR_BLOCKED) {
         send_keepalive();
     }
-    if (hid_tx[ITF_HID_CTAP].w_ptr > hid_tx[ITF_HID_CTAP].r_ptr && last_write_result[ITF_HID_CTAP] != WRITE_PENDING) {
+    if (hid_tx[ITF_HID_CTAP].w_ptr > hid_tx[ITF_HID_CTAP].r_ptr &&
+        __atomic_load_n(&last_write_result[ITF_HID_CTAP], __ATOMIC_ACQUIRE) != WRITE_PENDING) {
         if (driver_write_hid(ITF_HID_CTAP, hid_tx[ITF_HID_CTAP].buffer + hid_tx[ITF_HID_CTAP].r_ptr, 64) > 0) {
 
         }
