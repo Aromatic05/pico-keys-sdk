@@ -66,6 +66,7 @@ PACK(struct apdu {
 
 #define res_APDU (apdu.rdata)
 #define res_APDU_size (apdu.rlen)
+#define APDU_RESPONSE_BUFFER_SIZE 2064
 
 extern struct apdu apdu;
 
