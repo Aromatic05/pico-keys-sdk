@@ -83,30 +83,45 @@ int walk_tlv(const asn1_ctx_t *ctxi,
              uint16_t *tag,
              uint16_t *tag_len,
              uint8_t **data) {
-    if (!p) {
+    if (!ctxi || !ctxi->data || !p) {
         return 0;
     }
     if (!*p) {
         *p = (uint8_t *) ctxi->data;
     }
-    if (*p - ctxi->data >= ctxi->len) {
+    if (*p < ctxi->data || *p >= ctxi->data + ctxi->len) {
         return 0;
     }
+    uint8_t *cur = *p;
+    size_t remaining = (size_t)(ctxi->data + ctxi->len - cur);
     uint16_t tg = 0x0;
     uint16_t tgl = 0;
-    tg = *(*p)++;
+    tg = *cur++;
+    remaining--;
     if ((tg & 0x1f) == 0x1f) {
+        if (remaining < 1) return 0;
         tg <<= 8;
-        tg |= *(*p)++;
+        tg |= *cur++;
+        remaining--;
     }
-    tgl = *(*p)++;
+    if (remaining < 1) return 0;
+    tgl = *cur++;
+    remaining--;
     if (tgl == 0x82) {
-        tgl = *(*p)++ << 8;
-        tgl |= *(*p)++;
+        if (remaining < 2) return 0;
+        tgl = (uint16_t)*cur++ << 8;
+        tgl |= *cur++;
+        remaining -= 2;
     }
     else if (tgl == 0x81) {
-        tgl = *(*p)++;
+        if (remaining < 1) return 0;
+        tgl = *cur++;
+        remaining--;
     }
+    else if (tgl >= 0x80) {
+        return 0;
+    }
+    if (tgl > remaining) return 0;
     if (tag) {
         *tag = tg;
     }
@@ -114,9 +129,9 @@ int walk_tlv(const asn1_ctx_t *ctxi,
         *tag_len = tgl;
     }
     if (data) {
-        *data = *p;
+        *data = cur;
     }
-    *p = *p + tgl;
+    *p = cur + tgl;
     return 1;
 }
 

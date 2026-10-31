@@ -27,11 +27,11 @@
 #endif
 
 #define APDU_CHAIN_BUFFER_SIZE 2038
-#define APDU_RESPONSE_BUFFER_SIZE 2064
 
 typedef struct apdu_session_state {
     app_t *selected_app;
     bool is_chaining;
+    bool invalid_request;
     uint16_t chain_len;
     uint8_t chain_buf[APDU_CHAIN_BUFFER_SIZE];
     uint8_t response_buf[APDU_RESPONSE_BUFFER_SIZE];
@@ -85,6 +85,7 @@ static void apdu_send_continuation(uint8_t itf, uint16_t size) {
 
 static void apdu_reset_transport_state(apdu_session_state_t *session) {
     session->is_chaining = false;
+    session->invalid_request = false;
     session->chain_len = 0;
     apdu_clear_response(session);
     /* Request/response storage is transport-owned; do not invalidate it here. */
@@ -140,6 +141,13 @@ void apdu_reset_session(apdu_session_id_t session) {
 
 int process_apdu() {
     int result = SW_FILE_NOT_FOUND();
+    if (active_session->invalid_request) {
+        active_session->invalid_request = false;
+        active_session->is_chaining = false;
+        active_session->chain_len = 0;
+        result = SW_WRONG_LENGTH();
+        goto done;
+    }
     bool select_by_aid = INS(apdu) == 0xA4 && P1(apdu) == 0x04 &&
         (P2(apdu) == 0x00 || P2(apdu) == 0x04);
 
@@ -157,10 +165,14 @@ int process_apdu() {
 
     if (CLA(apdu) & 0x10) {
         if (active_session->chain_len + apdu.nc >= sizeof(active_session->chain_buf)) {
+            active_session->is_chaining = false;
+            active_session->chain_len = 0;
             result = SW_CLA_NOT_SUPPORTED();
             goto done;
         }
-        memcpy(active_session->chain_buf + active_session->chain_len, apdu.data, apdu.nc);
+        if (apdu.nc > 0) {
+            memcpy(active_session->chain_buf + active_session->chain_len, apdu.data, apdu.nc);
+        }
         active_session->chain_len += (uint16_t)apdu.nc;
         active_session->is_chaining = true;
         result = SW_OK();
@@ -168,9 +180,17 @@ int process_apdu() {
     }
 
     if (active_session->is_chaining) {
-        memmove(apdu.data + active_session->chain_len, apdu.data, apdu.nc);
-        memcpy(apdu.data, active_session->chain_buf, active_session->chain_len);
+        if (active_session->chain_len + apdu.nc >= sizeof(active_session->chain_buf)) {
+            active_session->is_chaining = false;
+            active_session->chain_len = 0;
+            result = SW_WRONG_LENGTH();
+            goto done;
+        }
+        if (apdu.nc > 0) {
+            memcpy(active_session->chain_buf + active_session->chain_len, apdu.data, apdu.nc);
+        }
         apdu.nc += active_session->chain_len;
+        apdu.data = active_session->chain_buf;
         active_session->is_chaining = false;
         active_session->chain_len = 0;
     }
@@ -192,7 +212,14 @@ done:
 uint16_t apdu_process(apdu_session_id_t session, uint8_t itf, const uint8_t *buffer, uint16_t buffer_size) {
     apdu_activate_session(session);
     apdu.header = (uint8_t *) buffer;
+    apdu.data = NULL;
     apdu.nc = apdu.ne = 0;
+    active_session->invalid_request = false;
+    if (buffer == NULL || buffer_size < 4) {
+        active_session->invalid_request = true;
+        apdu.ne = 256;
+        return 1;
+    }
     if (buffer_size == 4) {
         apdu.nc = apdu.ne = 0;
         if (apdu.ne == 0) {
@@ -217,6 +244,10 @@ uint16_t apdu_process(apdu_session_id_t session, uint8_t itf, const uint8_t *buf
             apdu.ne = 0;
             apdu.nc = get_uint16_t_be(apdu.header + 5);
             apdu.data = apdu.header + 7;
+            if (apdu.nc == 0 ||
+                (apdu.nc + 7 != buffer_size && apdu.nc + 7 + 2 != buffer_size)) {
+                active_session->invalid_request = true;
+            }
             if (apdu.nc + 7 + 2 == buffer_size) {
                 apdu.ne = get_uint16_t_be(apdu.header + buffer_size - 2);
                 if (apdu.ne == 0) {
@@ -229,12 +260,20 @@ uint16_t apdu_process(apdu_session_id_t session, uint8_t itf, const uint8_t *buf
         apdu.nc = apdu.header[4];
         apdu.data = apdu.header + 5;
         apdu.ne = 0;
+        if (apdu.nc + 5 != buffer_size && apdu.nc + 5 + 1 != buffer_size) {
+            active_session->invalid_request = true;
+        }
         if (apdu.nc + 5 + 1 == buffer_size) {
             apdu.ne = apdu.header[buffer_size - 1];
             if (apdu.ne == 0) {
                 apdu.ne = 256;
             }
         }
+    }
+
+    if (active_session->invalid_request) {
+        apdu.ne = 256;
+        return 1;
     }
 
     if (apdu.header[1] == 0xc0) {

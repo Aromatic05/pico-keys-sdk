@@ -208,7 +208,15 @@ file_t *search_by_path(const uint8_t *pe_path, uint8_t pathlen, const file_t *pa
 file_t *currentEF = NULL;
 file_t *currentDF = NULL;
 const file_t *selected_applet = NULL;
-bool isUserAuthenticated = false;
+static bool file_authenticated_sessions[APDU_SESSION_COUNT];
+
+bool *file_session_authenticated(void) {
+    return &file_authenticated_sessions[apdu_current_session()];
+}
+
+void file_clear_all_authenticated_sessions(void) {
+    memset(file_authenticated_sessions, 0, sizeof(file_authenticated_sessions));
+}
 
 bool authenticate_action(const file_t *ef, uint8_t op) {
     uint8_t acl = ef->acl[op];

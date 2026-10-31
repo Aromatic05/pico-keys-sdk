@@ -139,7 +139,9 @@ extern file_t dynamic_file[];
 extern file_t *search_dynamic_file(uint16_t);
 extern int delete_dynamic_file(file_t *f);
 
-extern bool isUserAuthenticated;
+extern bool *file_session_authenticated(void);
+extern void file_clear_all_authenticated_sessions(void);
+#define isUserAuthenticated (*file_session_authenticated())
 
 extern uint16_t meta_find(uint16_t, uint8_t **out);
 extern int meta_delete(uint16_t fid);
