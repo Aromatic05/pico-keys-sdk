@@ -112,6 +112,9 @@ int sm_unwrap() {
     if (sm_indicator == 0) {
         return PICOKEY_OK;
     }
+    if (sm_protocol == MSE_NONE || sm_blocksize == 0) {
+        return SW_SECURE_MESSAGING_NOT_SUPPORTED();
+    }
     int r = sm_verify();
     if (r != PICOKEY_OK) {
         return r;
