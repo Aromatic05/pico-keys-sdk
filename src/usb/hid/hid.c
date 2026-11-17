@@ -422,6 +422,12 @@ int driver_process_usb_packet_hid(uint16_t read) {
             if (MSG_LEN(ctap_req) > CTAP_MAX_PACKET_SIZE) {
                 return ctap_error(CTAP1_ERR_INVALID_LEN);
             }
+            if ((ctap_req->init.cmd == CTAPHID_PING || ctap_req->init.cmd == CTAPHID_SYNC) &&
+                MSG_LEN(ctap_req) > USB_BUFFER_SIZE - 7) {
+                hid_abort_transaction();
+                last_cmd = 0;
+                return ctap_error(CTAP1_ERR_INVALID_LEN);
+            }
             if (msg_packet.len > 0 && last_cmd_time + 100 > board_millis() &&
                 ctap_req->init.cmd != CTAPHID_INIT) {
                 if (last_req.cid != ctap_req->cid) { //We are in a transaction
