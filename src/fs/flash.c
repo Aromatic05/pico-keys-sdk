@@ -17,6 +17,9 @@
 
 
 #include <stdint.h>
+#ifdef ENABLE_EMULATION
+#include <stdlib.h>
+#endif
 #include <string.h>
 #include "pico_keys.h"
 #include "file.h"
@@ -136,6 +139,19 @@ int flash_clear_file(file_t *file) {
     if (file == NULL || file->data == NULL) {
         return PICOKEY_OK;
     }
+#ifdef ENABLE_EMULATION
+    static bool injected_failure_consumed = false;
+    const char *fail_fid = getenv("PICO_KEYS_EMU_FAIL_FLASH_CLEAR_FID_ONCE");
+    if (!injected_failure_consumed && fail_fid != NULL) {
+        char *end = NULL;
+        unsigned long fid = strtoul(fail_fid, &end, 0);
+        if (end != fail_fid && *end == '\0' && fid == file->fid) {
+            injected_failure_consumed = true;
+            fprintf(stderr, "PICO_KEYS_EMU_FLASH_CLEAR_FAULT fid=0x%04x\n", file->fid);
+            return PICOKEY_ERR_NO_MEMORY;
+        }
+    }
+#endif
     uintptr_t base_addr = (uintptr_t)(file->data - sizeof(uintptr_t) - sizeof(uint16_t) - sizeof(uintptr_t));
     uintptr_t prev_addr = flash_read_uintptr(base_addr + sizeof(uintptr_t));
     uintptr_t next_addr = flash_read_uintptr(base_addr);
